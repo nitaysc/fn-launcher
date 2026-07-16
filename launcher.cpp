@@ -385,33 +385,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 SetStatus("Cheat not found. Run update first.");
                 break;
             }
-            // Kill any stale instance
-            const char* procName = LAUNCHER_EXE;
+            // Kill stale process
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (snap != INVALID_HANDLE_VALUE) {
-                PROCESSENTRY32 pe = { sizeof(pe) };
-                if (Process32First(snap, &pe)) {
-                    do {
-                        if (_stricmp(pe.szExeFile, procName) == 0) {
-                            HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
-                            if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
-                            Sleep(200);
-                        }
-                    } while (Process32Next(snap, &pe));
-                }
+                PROCESSENTRY32W pe = { sizeof(pe) };
+                if (Process32FirstW(snap, &pe)) do {
+                    if (wcsstr(pe.szExeFile, L"FortniteESP")) {
+                        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                        if (hProc) { TerminateProcess(hProc, 1); CloseHandle(hProc); }
+                    }
+                } while (Process32NextW(snap, &pe));
                 CloseHandle(snap);
+                Sleep(300);
             }
-            // Launch with correct working directory
-            std::string workDir = GetLocalPath("");
-            STARTUPINFOA si = { sizeof(si) };
-            PROCESS_INFORMATION pi = {};
-            if (CreateProcessA(NULL, (LPSTR)exePath.c_str(), NULL, NULL, FALSE,
-                CREATE_DEFAULT_ERROR_MODE, NULL, workDir.c_str(), &si, &pi)) {
-                CloseHandle(pi.hThread);
-                CloseHandle(pi.hProcess);
-            } else {
-                SetStatus("Failed to launch cheat");
-            }
+            // Force a completely fresh process via runas verb
+            ShellExecuteA(NULL, "runas", exePath.c_str(), NULL, GetLocalPath("").c_str(), SW_SHOW);
+            SetStatus("Cheat launched");
         }
         if (id == IDC_UPDATE) {
             g_ready = false;
