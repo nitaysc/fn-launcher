@@ -123,6 +123,26 @@ static std::string ExtractJson(const std::string& j, const char* f)
     if (p == -1) return ""; p += strlen(s);
     size_t e = j.find("\"", p); return e == -1 ? "" : j.substr(p, e-p);
 }
+static std::string FindAssetUrl(const std::string& j, const char* namePart)
+{
+    size_t p = 0;
+    while ((p = j.find("\"name\":\"", p)) != std::string::npos) {
+        p += 8;
+        size_t e = j.find("\"", p);
+        if (e == std::string::npos) break;
+        std::string name = j.substr(p, e - p);
+        if (name.find(namePart) != std::string::npos) {
+            size_t urlP = j.find("\"browser_download_url\":\"", e);
+            if (urlP != std::string::npos) {
+                urlP += 24;
+                size_t urlE = j.find("\"", urlP);
+                if (urlE != std::string::npos) return j.substr(urlP, urlE - urlP);
+            }
+        }
+        p = e;
+    }
+    return "";
+}
 static bool UnzipTo(const char* zip, const char* dst)
 {
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED); bool ok = false;
@@ -217,7 +237,8 @@ static void Worker()
     std::string j = HttpGet("https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest");
     if (!j.empty()) {
         strncpy_s(g_latestVer, ExtractJson(j,"tag_name").c_str(), sizeof(g_latestVer)-1);
-        strncpy_s(g_downloadUrl, ExtractJson(j,"browser_download_url").c_str(), sizeof(g_downloadUrl)-1);
+        std::string url = FindAssetUrl(j, "fn-cheat");
+        if (!url.empty()) strncpy_s(g_downloadUrl, url.c_str(), sizeof(g_downloadUrl)-1);
     }
     g_progress = 10; InvalAll();
     g_updateAvail = (strcmp(g_localVer, g_latestVer) != 0);
@@ -236,8 +257,20 @@ static void Worker()
         } else { strcpy_s(g_status, "Download failed"); InvalAll(); g_launchEnabled = FileExists(GetLocalPath(LAUNCHER_EXE).c_str()); Inval(B_LAUNCH); g_updating = false; return; }
         DeleteFileA(zp.c_str());
     }
+    g_progress = 70; strcpy_s(g_status, "Checking ViGEmBus..."); InvalAll();
+    if (!EnsureDriver("vigembus","ViGEmBus.sys","Nefarius Virtual Gamepad Emulation Service")) {
+        strcpy_s(g_status, "Installing ViGEmBus..."); g_progress = 75; InvalAll();
+        std::string vigem = GetLocalPath("ViGEmBusSetup.exe");
+        if (!FileExists(vigem.c_str())) {
+            URLDownloadToFileA(NULL, "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe", vigem.c_str(), 0, NULL);
+        }
+        if (FileExists(vigem.c_str())) {
+            char cmd[512]; sprintf_s(cmd, "\"%s\" /install /quiet /norestart", vigem.c_str());
+            RunCmd(cmd, true);
+        }
+        EnsureDriver("vigembus","ViGEmBus.sys","Nefarius Virtual Gamepad Emulation Service");
+    }
     g_progress = 85; strcpy_s(g_status, "Starting drivers..."); InvalAll();
-    EnsureDriver("vigembus","ViGEmBus.sys","Nefarius Virtual Gamepad Emulation Service"); Sleep(100);
     EnsureDriver(DRIVER_SERVICE,DRIVER_SYS,"xHunters kernel driver"); Sleep(100);
     g_progress = 100; g_ready = true; g_launchEnabled = true; g_updating = false;
     strcpy_s(g_status, "Ready"); InvalAll();
