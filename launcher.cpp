@@ -385,21 +385,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 SetStatus("Cheat not found. Run update first.");
                 break;
             }
-            // Kill stale process
-            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if (snap != INVALID_HANDLE_VALUE) {
-                PROCESSENTRY32W pe = { sizeof(pe) };
-                if (Process32FirstW(snap, &pe)) do {
-                    if (wcsstr(pe.szExeFile, L"FortniteESP")) {
-                        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
-                        if (hProc) { TerminateProcess(hProc, 1); CloseHandle(hProc); }
-                    }
-                } while (Process32NextW(snap, &pe));
-                CloseHandle(snap);
-                Sleep(300);
-            }
-            // Launch with ShellExecute - clean process creation
-            ShellExecuteA(NULL, "open", exePath.c_str(), NULL, GetLocalPath("").c_str(), SW_SHOW);
+            // Launch - keep it simple
+            SHELLEXECUTEINFOW sei = { sizeof(sei) };
+            WCHAR wExe[MAX_PATH];
+            MultiByteToWideChar(CP_UTF8, 0, exePath.c_str(), -1, wExe, MAX_PATH);
+            sei.lpFile = wExe;
+            sei.lpDirectory = wExe;
+            sei.nShow = SW_SHOW;
+            // Truncate directory from full path
+            WCHAR* p = wcsrchr(sei.lpDirectory, L'\\');
+            if (p) *p = 0;
+            ShellExecuteExW(&sei);
             SetStatus("Cheat launched");
         }
         if (id == IDC_UPDATE) {
