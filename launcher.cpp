@@ -386,15 +386,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             // Launch - keep it simple
-            SHELLEXECUTEINFOW sei = { sizeof(sei) };
-            WCHAR wExe[MAX_PATH];
+            WCHAR wExe[MAX_PATH], wDir[MAX_PATH];
             MultiByteToWideChar(CP_UTF8, 0, exePath.c_str(), -1, wExe, MAX_PATH);
-            sei.lpFile = wExe;
-            sei.lpDirectory = wExe;
-            sei.nShow = SW_SHOW;
-            // Truncate directory from full path
-            WCHAR* p = wcsrchr(sei.lpDirectory, L'\\');
+            wcscpy_s(wDir, wExe);
+            WCHAR* p = wcsrchr(wDir, L'\\');
             if (p) *p = 0;
+            SHELLEXECUTEINFOW sei = { sizeof(sei) };
+            sei.lpFile = wExe;
+            sei.lpDirectory = wDir;
+            sei.nShow = SW_SHOW;
             ShellExecuteExW(&sei);
             SetStatus("Cheat launched");
         }
