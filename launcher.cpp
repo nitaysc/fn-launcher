@@ -25,7 +25,7 @@
 #define VERSION_FILE   "version.txt"
 #define DRIVER_SERVICE "xhunter1"
 #define DRIVER_SYS     "ACvalun.sys"
-#define CURRENT_VER    "1.6"
+#define CURRENT_VER    "1.7"
 #define APP_TITLE      L"FN Cheat"
 
 #define IDC_STATUS     1001
