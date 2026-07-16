@@ -407,6 +407,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 CloseHandle(snap);
                 Sleep(500);
             }
+            // Restart driver to clear stale state
+            RunCmd("sc stop xhunter1", false);
+            Sleep(1000);
+            RunCmd("sc start xhunter1", false);
+            Sleep(500);
             if (!ShellExecuteExW(&sei)) {
                 SetStatus("Launch failed");
                 break;
