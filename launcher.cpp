@@ -100,6 +100,18 @@ static bool RunCmd(const char* c, bool wait = true)
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return true;
 }
 static bool FileExists(const char* p) { DWORD a = GetFileAttributesA(p); return a != -1 && !(a & FILE_ATTRIBUTE_DIRECTORY); }
+static void LogMsg(const char* fmt, ...)
+{
+    char p[MAX_PATH]; GetModuleFileNameA(NULL, p, MAX_PATH);
+    char* s = strrchr(p, '\\'); if (s) *s = 0;
+    strcat_s(p, "\\launcher_log.txt");
+    FILE* f = NULL; fopen_s(&f, p, "a");
+    if (!f) return;
+    SYSTEMTIME t; GetLocalTime(&t);
+    fprintf(f, "[%02d:%02d:%02d] ", t.wHour, t.wMinute, t.wSecond);
+    va_list a; va_start(a, fmt); vfprintf(f, fmt, a); va_end(a);
+    fprintf(f, "\n"); fclose(f);
+}
 static std::string GetLocalPath(const char* sub = "")
 {
     char p[MAX_PATH] = {}; SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, p);
@@ -108,14 +120,18 @@ static std::string GetLocalPath(const char* sub = "")
 static std::string HttpGet(const char* url)
 {
     std::string r; HINTERNET s = WinHttpOpen(L"Launcher/2.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-    if (!s) return r;
+    if (!s) { LogMsg("HttpGet: WinHttpOpen failed"); return r; }
     HINTERNET c = WinHttpConnect(s, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (c) {
-        HINTERNET q = WinHttpOpenRequest(c, L"GET", L"/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
-        if (q) { WinHttpSendRequest(q, NULL, 0, NULL, 0, 0, 0); WinHttpReceiveResponse(q, NULL);
-            char b[1024]; DWORD rd; while (WinHttpReadData(q, b, sizeof(b)-1, &rd) && rd > 0) { b[rd]=0; r+=b; } WinHttpCloseHandle(q); }
-        WinHttpCloseHandle(c);
-    } WinHttpCloseHandle(s); return r;
+    if (!c) { LogMsg("HttpGet: WinHttpConnect failed"); WinHttpCloseHandle(s); return r; }
+    HINTERNET q = WinHttpOpenRequest(c, L"GET", L"/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
+    if (!q) { LogMsg("HttpGet: WinHttpOpenRequest failed"); WinHttpCloseHandle(c); WinHttpCloseHandle(s); return r; }
+    BOOL sent = WinHttpSendRequest(q, NULL, 0, NULL, 0, 0, 0);
+    if (!sent) { LogMsg("HttpGet: WinHttpSendRequest failed"); WinHttpCloseHandle(q); WinHttpCloseHandle(c); WinHttpCloseHandle(s); return r; }
+    WinHttpReceiveResponse(q, NULL);
+    char b[1024]; DWORD rd; while (WinHttpReadData(q, b, sizeof(b)-1, &rd) && rd > 0) { b[rd]=0; r+=b; }
+    WinHttpCloseHandle(q); WinHttpCloseHandle(c); WinHttpCloseHandle(s);
+    LogMsg("HttpGet: received %zu bytes", r.size());
+    return r;
 }
 static std::string ExtractJson(const std::string& j, const char* f)
 {
@@ -239,6 +255,7 @@ static void DrawOctocat(HDC hdc, int x, int y, int s)
 // ---------- worker ----------
 static void Worker()
 {
+    LogMsg("Worker started");
     SHCreateDirectoryExA(NULL, GetLocalPath("").c_str(), NULL);
     FILE* f = NULL;
     std::string vp = GetLocalPath(VERSION_FILE);
@@ -248,33 +265,49 @@ static void Worker()
             if (len > 0 && g_localVer[len-1] == '\n') g_localVer[len-1] = 0;
         } fclose(f);
     }
+    LogMsg("Local version: %s", g_localVer);
     strcpy_s(g_status, "Checking for updates..."); g_progress = 5; InvalAll();
     std::string j = HttpGet("https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest");
     if (!j.empty()) {
         strncpy_s(g_latestVer, ExtractJson(j,"tag_name").c_str(), sizeof(g_latestVer)-1);
         std::string url = FindAssetUrl(j, "fn-cheat");
-        if (!url.empty()) strncpy_s(g_downloadUrl, url.c_str(), sizeof(g_downloadUrl)-1);
-        else { strcpy_s(g_status, "No cheat asset found in release"); InvalAll(); }
+        if (!url.empty()) {
+            strncpy_s(g_downloadUrl, url.c_str(), sizeof(g_downloadUrl)-1);
+            LogMsg("Found asset URL: %s", g_downloadUrl);
+        } else {
+            strcpy_s(g_status, "No cheat asset found in release"); InvalAll();
+            LogMsg("No fn-cheat asset found");
+        }
     } else {
         strcpy_s(g_status, "GitHub API unreachable"); InvalAll();
+        LogMsg("GitHub API response empty");
     }
     g_progress = 10; InvalAll();
     g_updateAvail = (strcmp(g_localVer, g_latestVer) != 0);
     bool needDL = !FileExists(GetLocalPath(LAUNCHER_EXE).c_str()) || g_updateAvail;
+    LogMsg("needDL=%d updateAvail=%d exeExists=%d", (int)needDL, (int)g_updateAvail, (int)FileExists(GetLocalPath(LAUNCHER_EXE).c_str()));
     if (needDL && g_downloadUrl[0]) {
         strcpy_s(g_status, "Downloading..."); g_progress = 15; InvalAll();
         std::string zp = GetLocalPath("update.zip");
-        if (SUCCEEDED(URLDownloadToFileA(NULL, g_downloadUrl, zp.c_str(), 0, NULL))) {
+        LogMsg("Downloading to: %s", zp.c_str());
+        HRESULT hr = URLDownloadToFileA(NULL, g_downloadUrl, zp.c_str(), 0, NULL);
+        if (SUCCEEDED(hr)) {
+            LogMsg("Download succeeded");
             g_progress = 55; strcpy_s(g_status, "Extracting..."); InvalAll();
             if (UnzipTo(zp.c_str(), GetLocalPath("").c_str())) {
+                LogMsg("Extract succeeded");
                 g_progress = 80; Sleep(100);
                 if (fopen_s(&f, vp.c_str(), "w") == 0 && f) { fprintf(f, "%s", g_latestVer); fclose(f); }
                 strcpy_s(g_localVer, g_latestVer); InvalAll();
                 g_updateAvail = false;
-            } else strcpy_s(g_status, "Extract failed");
+            } else {
+                strcpy_s(g_status, "Extract failed");
+                LogMsg("Extract failed");
+            }
         } else {
-            strcpy_s(g_status, "Download failed (check internet/GitHub)");
-            InvalAll();
+            char emsg[128]; sprintf_s(emsg, "Download failed (0x%08X)", (unsigned)hr);
+            strcpy_s(g_status, emsg); InvalAll();
+            LogMsg("Download failed HRESULT=0x%08X", (unsigned)hr);
             g_launchEnabled = FileExists(GetLocalPath(LAUNCHER_EXE).c_str());
             Inval(B_LAUNCH); g_updating = false;
             return;
@@ -283,6 +316,7 @@ static void Worker()
     }
     g_progress = 70; strcpy_s(g_status, "Checking ViGEmBus..."); InvalAll();
     if (!ServiceExists("vigembus")) {
+        LogMsg("ViGEmBus service not found, installing");
         strcpy_s(g_status, "Installing ViGEmBus..."); g_progress = 75; InvalAll();
         std::string vigem = GetLocalPath("ViGEmBusSetup.exe");
         if (!FileExists(vigem.c_str())) {
@@ -293,13 +327,16 @@ static void Worker()
             RunCmd(cmd, true);
         } else {
             strcpy_s(g_status, "ViGEmBus download failed"); InvalAll();
+            LogMsg("ViGEmBus installer download failed");
         }
     } else {
+        LogMsg("ViGEmBus service exists");
         StartService("vigembus");
     }
     g_progress = 85; strcpy_s(g_status, "Starting drivers..."); InvalAll();
     EnsureDriver(DRIVER_SERVICE,DRIVER_SYS,"xHunters kernel driver"); Sleep(100);
     g_progress = 100; g_ready = true; g_launchEnabled = true; g_updating = false;
+    LogMsg("Ready. Cheat exists: %d", (int)FileExists(GetLocalPath(LAUNCHER_EXE).c_str()));
     strcpy_s(g_status, "Ready"); InvalAll();
 }
 
@@ -389,7 +426,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM w, LPARAM lp)
             g_ripple.y = (float)(g_rcLaunch.top + g_rcLaunch.bottom) * 0.5f;
             g_ripple.r = 0; g_ripple.maxR = 110.0f;
             std::string exe = GetLocalPath(LAUNCHER_EXE);
-            if (!FileExists(exe.c_str())) { strcpy_s(g_status, "Cheat not found."); InvalAll(); break; }
+            if (!FileExists(exe.c_str())) {
+                LogMsg("Launch clicked but cheat missing: %s", exe.c_str());
+                strcpy_s(g_status, "Cheat not found"); InvalAll();
+                MessageBoxA(g_hWnd, "Cheat not found. Check launcher_log.txt next to the launcher for details.", "FN Launcher", MB_OK | MB_ICONERROR);
+                break;
+            }
             WCHAR we[MAX_PATH], wd[MAX_PATH];
             MultiByteToWideChar(CP_UTF8,0,exe.c_str(),-1,we,MAX_PATH);
             wcscpy_s(wd,we); WCHAR* p = wcsrchr(wd,L'\\'); if(p)*p=0;
