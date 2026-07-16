@@ -160,6 +160,21 @@ static bool UnzipTo(const char* zip, const char* dst)
         VariantClear(&vD); sh->Release();
     } CoUninitialize(); return ok;
 }
+static bool ServiceExists(const char* svc)
+{
+    SC_HANDLE scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm) return false;
+    SC_HANDLE s = OpenServiceA(scm, svc, SERVICE_QUERY_STATUS);
+    bool ok = (s != NULL);
+    if (s) CloseServiceHandle(s);
+    CloseServiceHandle(scm);
+    return ok;
+}
+static bool StartService(const char* svc)
+{
+    char b[128]; sprintf_s(b, "sc start %s", svc);
+    return RunCmd(b, false);
+}
 static bool EnsureDriver(const char* svc, const char* sys, const char* disp)
 {
     std::string sp = GetLocalPath(sys); if (!FileExists(sp.c_str())) return false;
@@ -239,6 +254,9 @@ static void Worker()
         strncpy_s(g_latestVer, ExtractJson(j,"tag_name").c_str(), sizeof(g_latestVer)-1);
         std::string url = FindAssetUrl(j, "fn-cheat");
         if (!url.empty()) strncpy_s(g_downloadUrl, url.c_str(), sizeof(g_downloadUrl)-1);
+        else { strcpy_s(g_status, "No cheat asset found in release"); InvalAll(); }
+    } else {
+        strcpy_s(g_status, "GitHub API unreachable"); InvalAll();
     }
     g_progress = 10; InvalAll();
     g_updateAvail = (strcmp(g_localVer, g_latestVer) != 0);
@@ -254,11 +272,17 @@ static void Worker()
                 strcpy_s(g_localVer, g_latestVer); InvalAll();
                 g_updateAvail = false;
             } else strcpy_s(g_status, "Extract failed");
-        } else { strcpy_s(g_status, "Download failed"); InvalAll(); g_launchEnabled = FileExists(GetLocalPath(LAUNCHER_EXE).c_str()); Inval(B_LAUNCH); g_updating = false; return; }
+        } else {
+            strcpy_s(g_status, "Download failed (check internet/GitHub)");
+            InvalAll();
+            g_launchEnabled = FileExists(GetLocalPath(LAUNCHER_EXE).c_str());
+            Inval(B_LAUNCH); g_updating = false;
+            return;
+        }
         DeleteFileA(zp.c_str());
     }
     g_progress = 70; strcpy_s(g_status, "Checking ViGEmBus..."); InvalAll();
-    if (!EnsureDriver("vigembus","ViGEmBus.sys","Nefarius Virtual Gamepad Emulation Service")) {
+    if (!ServiceExists("vigembus")) {
         strcpy_s(g_status, "Installing ViGEmBus..."); g_progress = 75; InvalAll();
         std::string vigem = GetLocalPath("ViGEmBusSetup.exe");
         if (!FileExists(vigem.c_str())) {
@@ -267,8 +291,11 @@ static void Worker()
         if (FileExists(vigem.c_str())) {
             char cmd[512]; sprintf_s(cmd, "\"%s\" /install /quiet /norestart", vigem.c_str());
             RunCmd(cmd, true);
+        } else {
+            strcpy_s(g_status, "ViGEmBus download failed"); InvalAll();
         }
-        EnsureDriver("vigembus","ViGEmBus.sys","Nefarius Virtual Gamepad Emulation Service");
+    } else {
+        StartService("vigembus");
     }
     g_progress = 85; strcpy_s(g_status, "Starting drivers..."); InvalAll();
     EnsureDriver(DRIVER_SERVICE,DRIVER_SYS,"xHunters kernel driver"); Sleep(100);
