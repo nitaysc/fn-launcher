@@ -1,5 +1,5 @@
 // main.cpp - Fortnite ESP Box
-// Build: v41.20
+// Build: v41.20 CL-55550516
 #ifndef _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
@@ -16,12 +16,10 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 
+#include <cstdlib>
+#include <algorithm>
 #include <d3d11.h>
 #pragma comment(lib, "d3d11.lib")
-
-#include <intrin.h>
-#include <winternl.h>
-#pragma comment(lib, "ntdll.lib")
 
 #include "driver.h"
 #include "offsets.h"
@@ -43,13 +41,6 @@ static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
 
 static int g_screenWidth = 0;
 static int g_screenHeight = 0;
-
-// ============================================================
-// GUI Animation state
-// ============================================================
-static float g_menuAlpha = 1.0f;
-static float g_menuTargetAlpha = 1.0f;
-static float g_pulsePhase = 0.0f;
 
 // ============================================================
 // Types
@@ -80,8 +71,6 @@ struct ESPSettings {
     bool showWeaponInfo = true;
     bool showStatusIndicators = true;
     bool showKillCount = false;
-    bool showFovCircle = true;
-    float fovCircleThickness = 1.5f;
 
     BoxStyle boxStyle = BoxStyle::CORNER;
     ColorMode colorMode = ColorMode::DISTANCE_BASED;
@@ -93,37 +82,15 @@ struct ESPSettings {
 
     float skeletonLineWidth = 1.5f;
     bool skeletonGradient = true;
-    bool skeletonGlow = false;
+    bool skeletonGlow = true;
     bool outlinedText = true;
 
     float distClose = 50.0f;
     float distMid = 150.0f;
     float distFar = 300.0f;
 
-    int maxDistance = 500;
-    bool showDebug = false;
+    int maxDistance = 300;
 } g_settings;
-
-char g_debugPtr[8192] = {};
-// ============================================================
-// Aimbot Settings
-// ============================================================
-struct AimbotSettings {
-    bool enabled = false;
-    float smooth = 0.12f;      // 0.01=very slow 0.5=fast
-    float fov = 15.0f;         // degrees from crosshair
-    int aimKey = VK_RBUTTON;   // RMB by default
-    bool autoFire = false;
-    bool aimAtTeam = false;    // allow aiming at teammates
-    bool aimThroughWalls = true;
-    bool visibleCheck = false;
-    float randomSkip = 0.25f;  // skip ~25% of frames randomly
-    float randomOffset = 0.5f; // max degrees of random noise
-    float stickSensitivity = 0.85f; // ViGEm right stick sensitivity (0.1-1.0)
-    float stickDeadzone = 0.03f;    // deadzone fraction (0.0-0.2)
-    int aimToggleKey = 0x50;        // 'P' key to toggle aimbot master switch
-    bool masterEnabled = true;      // toggled by aimToggleKey
-} g_aim;
 
 struct PlayerData {
     FVec3 position;
@@ -136,7 +103,6 @@ struct PlayerData {
     bool isCrouched;
     bool isSliding;
     bool isSkydiving;
-    bool isInVehicle;
 
     wchar_t playerName[64];
     wchar_t weaponName[128];
@@ -150,13 +116,30 @@ struct PlayerData {
     bool hasBones;
 };
 
+struct AimbotSettings {
+    bool enabled = true;
+    float smooth = 0.10f;      // 0.01=very slow 0.5=fast
+    float fov = 15.0f;         // degrees from crosshair
+    int aimKey = VK_RBUTTON;   // RMB by default
+    bool autoFire = false;
+    bool aimAtTeam = false;    // allow aiming at teammates
+    bool aimThroughWalls = true;
+    bool visibleCheck = false;
+    float randomSkip = 0.00f;  // skip frames randomly
+    float randomOffset = 0.5f; // max degrees of random noise
+    float stickSensitivity = 0.85f; // ViGEm right stick sensitivity (0.1-1.0)
+    float stickDeadzone = 0.06f;    // deadzone fraction (0.0-0.2)
+    int aimToggleKey = 0x50;        // 'P' key to toggle aimbot master switch
+    bool masterEnabled = true;      // toggled by aimToggleKey
+} g_aim;
+
+ViGEmManager g_vigem;
 Driver g_driver;
 bool g_driverReady = false;
 uint32_t g_targetPID = 0;
 uint64_t g_gameBase = 0;
 int g_playerCount = 0;
 int g_renderFrameIdx = 0;
-ViGEmManager g_vigem;
 
 struct ScreenBone { FVec2 s; bool visible; };
 
@@ -175,7 +158,6 @@ struct ESPFrame {
     int playerCount;
     bool hasData;
     PlayerData localPlayer;
-    ScreenBone localScreenBones[16];
     bool hasLocalPlayer;
 };
 
@@ -186,7 +168,7 @@ static std::atomic<bool> g_espThreadRunning{false};
 static std::thread g_espThread;
 
 // ============================================================
-// Memory read helpers
+// Memory read helper
 // ============================================================
 template<typename T>
 T Read(uint64_t addr) {
@@ -196,172 +178,34 @@ T Read(uint64_t addr) {
     return val;
 }
 
-// Batch read: one IOCTL for a large chunk instead of many small ones
 inline bool ReadBuffer(uint64_t addr, void* dst, uint32_t size) {
     if (!g_targetPID || !addr || !dst || !size) return false;
     return xhdr::ProcessRead(g_targetPID, addr, dst, size);
 }
 
 // ============================================================
-// Direct syscall memory write (bypasses EAC's ntdll hooks)
+// GEngine helpers
 // ============================================================
-// Build syscall stubs in executable memory to call NT functions
-// without going through EAC-hooked ntdll.
-
-typedef struct _MY_CLIENT_ID {
-    HANDLE UniqueProcess;
-    HANDLE UniqueThread;
-} MY_CLIENT_ID;
-
-static HANDLE g_gameHandle = NULL;
-
-// Build a syscall stub: mov r10,rcx; mov eax,SSN; syscall; ret
-void* BuildSyscallStub(DWORD syscallNum)
-{
-    BYTE code[] = {
-        0x4C, 0x8B, 0xD1,                         // mov r10, rcx
-        0xB8, 0x00, 0x00, 0x00, 0x00,             // mov eax, SSN
-        0x0F, 0x05,                                // syscall
-        0xC3                                       // ret
-    };
-    *(DWORD*)(code + 4) = syscallNum;
-
-    void* mem = VirtualAlloc(NULL, sizeof(code), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!mem) return NULL;
-    memcpy(mem, code, sizeof(code));
-    return mem;
-}
-
-DWORD GetSyscallNumber(const char* fnName)
-{
-    HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
-    if (!hNtdll) return 0;
-    BYTE* fn = (BYTE*)GetProcAddress(hNtdll, fnName);
-    if (!fn) return 0;
-    if (fn[0] == 0xB8) return *(DWORD*)(fn + 1);
-    // Some Windows builds have a jmp to the real implementation
-    if (fn[0] == 0xE9) {
-        DWORD offset = *(DWORD*)(fn + 1);
-        BYTE* target = fn + 5 + offset;
-        if (target[0] == 0xB8) return *(DWORD*)(target + 1);
-    }
-    return 0;
-}
-
-bool OpenGameHandle()
-{
-    if (g_gameHandle) return true;
-
-    DWORD scNtOpenProcess = GetSyscallNumber("NtOpenProcess");
-    if (!scNtOpenProcess) {
-        static auto pNtOP = (NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, MY_CLIENT_ID*))
-            GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtOpenProcess");
-        if (!pNtOP) return false;
-        MY_CLIENT_ID cid = { (HANDLE)(UINT_PTR)g_targetPID, NULL };
-        OBJECT_ATTRIBUTES oa = { sizeof(oa) };
-        return pNtOP(&g_gameHandle, PROCESS_VM_WRITE | PROCESS_VM_OPERATION, &oa, &cid) >= 0;
-    }
-
-    auto pNtOP = (NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, MY_CLIENT_ID*))BuildSyscallStub(scNtOpenProcess);
-    if (!pNtOP) return false;
-    MY_CLIENT_ID cid = { (HANDLE)(UINT_PTR)g_targetPID, NULL };
-    OBJECT_ATTRIBUTES oa = { sizeof(oa) };
-    NTSTATUS sts = pNtOP(&g_gameHandle, PROCESS_VM_WRITE | PROCESS_VM_OPERATION, &oa, &cid);
-    VirtualFree(pNtOP, 0, MEM_RELEASE);
-    if (sts < 0 || !g_gameHandle) return false;
-    return true;
-}
-
-template<typename T>
-void WriteSafe(uint64_t addr, const T& val)
-{
-    if (!g_targetPID || !addr) return;
-    if (!g_gameHandle && !OpenGameHandle()) return;
-
-    DWORD scNtWriteVM = GetSyscallNumber("NtWriteVirtualMemory");
-    if (!scNtWriteVM) return;
-
-    auto pNtWriteVM = (NTSTATUS(NTAPI*)(HANDLE, PVOID, PVOID, ULONG, PULONG))BuildSyscallStub(scNtWriteVM);
-    if (!pNtWriteVM) return;
-
-    ULONG written = 0;
-    pNtWriteVM(g_gameHandle, (PVOID)addr, (PVOID)&val, sizeof(T), &written);
-    VirtualFree(pNtWriteVM, 0, MEM_RELEASE);
-}
-
-// ============================================================
-// Probe undocumented IOCTL commands in the kernel driver
-// Tries writing a test value to a known address using different
-// command codes (since the driver has no official write command).
-// ============================================================
-void ProbeDriverWrite(uint64_t testAddr, const void* testData, uint32_t dataSize)
-{
-    struct {
-        UINT64 handle;
-        UINT64 dstVA;    // target address
-        UINT64 srcPtr;   // source data (in our process space)
-        DWORD  size;
-    } p;
-
-    HANDLE h = xhdr::GetTargetHandle(g_targetPID);
-    if (!h) {
-        printf("[PROBE] No target handle\n");
-        return;
-    }
-
-    // Use the cached handle directly
-    p.handle = (UINT64)h;
-    p.dstVA  = testAddr;
-    p.srcPtr = (UINT64)testData;
-    p.size   = dataSize;
-
-    const DWORD codesToTry[] = {
-        778, 779, 780, 782, 783, 784, 786, 789, 790, 791, 792,
-        793, 794, 795, 796, 797, 798, 799, 800, 802, 803, 804,
-        805, 806, 807, 808, 809, 810, 811, 812, 813, 814, 816, 817, 818
-    };
-
-    for (DWORD code : codesToTry) {
-        xhdr::SendCmd(code, &p, sizeof(p), true);
-        DWORD sts = xhdr::GetThreadRsp().rsp.status;
-        if ((INT32)sts >= 0) {
-            printf("[PROBE] CMD %u returned STATUS=0x%08X (SUCCESS!)\n", code, (unsigned)sts);
-        } else if (sts != 0xC0000001 && sts != 0xC0000010 && sts != 0xC00000BB) {
-            // Log unexpected errors (not the common "unsupported" ones)
-            printf("[PROBE] CMD %u -> 0x%08X\n", code, (unsigned)sts);
-        }
-    }
-    printf("[PROBE] Done probing\n");
-}
-
-// Write via xhunter1 cmd 786 (byte-buffer approach, no alignment issues)
-template<typename T>
-void Write786(uint64_t addr, const T& val) {
-    if (!g_targetPID || !addr) return;
-    BYTE buf[128] = {};
-    *(UINT64*)(buf + 0) = (UINT64)xhdr::GetTargetHandle(g_targetPID);
-    *(UINT64*)(buf + 8) = addr;
-    *(UINT32*)(buf + 16) = (UINT32)sizeof(T);
-    memcpy(buf + 20, &val, sizeof(T));
-    DWORD totalSize = 20 + (DWORD)sizeof(T);
-    xhdr::SendCmd(786, buf, totalSize, true);
-}
-
-// Async write through driver queue (returns immediately, worker drains)
-template<typename T>
-void Write(uint64_t addr, const T& val) {
-    if (!g_targetPID || !addr) return;
-    xhdr::ProcessWrite(g_targetPID, addr, &val, sizeof(T));
-}
-
-// ============================================================
-// Get UWorld (decrypt from static address)
-// ============================================================
-uint64_t GetUWorld()
+uint64_t GetViewport()
 {
     if (!g_targetPID || !g_gameBase) return 0;
-    uint64_t encrypted = Read<uint64_t>(g_gameBase + offsets::core::GWorld);
-    return offsets::uworld::decrypt(encrypted);
+    uint64_t engine = Read<uint64_t>(g_gameBase + offsets::core::gEngine);
+    if (!engine) return 0;
+    return Read<uint64_t>(engine + offsets::core::GameViewport);
+}
+
+uint64_t GetUWorld()
+{
+    uint64_t viewport = GetViewport();
+    if (!viewport) return 0;
+    return Read<uint64_t>(viewport + offsets::core::ViewportClient);
+}
+
+uint64_t GetGameInstance()
+{
+    uint64_t viewport = GetViewport();
+    if (!viewport) return 0;
+    return Read<uint64_t>(viewport + 0x80);  // UGameViewportClient::GameInstance
 }
 
 void DebugUWorld()
@@ -370,19 +214,47 @@ void DebugUWorld()
         printf("[-] No target\n"); return;
     }
     printf("[DBG] gameBase=0x%llX\n", (unsigned long long)g_gameBase);
-    printf("[DBG] reading UWorld from: 0x%llX\n", (unsigned long long)(g_gameBase + offsets::core::GWorld));
-    
-    uint64_t encrypted = Read<uint64_t>(g_gameBase + offsets::core::GWorld);
-    printf("[DBG] encrypted=0x%llX\n", (unsigned long long)encrypted);
-    
-    uint64_t decrypted = offsets::uworld::decrypt(encrypted);
-    printf("[DBG] decrypted=0x%llX\n", (unsigned long long)decrypted);
-    
-    if (decrypted) {
-        uint64_t level = Read<uint64_t>(decrypted + offsets::core::PersistentLevel);
-        uint64_t gs = Read<uint64_t>(decrypted + offsets::core::GameState);
-        printf("[DBG] PersistentLevel=0x%llX GameState=0x%llX\n",
-            (unsigned long long)level, (unsigned long long)gs);
+    uint64_t engine = Read<uint64_t>(g_gameBase + offsets::core::gEngine);
+    printf("[DBG] GEngine=0x%llX\n", (unsigned long long)engine);
+    if (!engine) { printf("[-] GEngine is NULL\n"); return; }
+    uint64_t viewport = Read<uint64_t>(engine + offsets::core::GameViewport);
+    printf("[DBG] GameViewport(0xB70)=0x%llX\n", (unsigned long long)viewport);
+    uint64_t gameInst = Read<uint64_t>(engine + 0x288);
+    printf("[DBG] GameInstance(0x288)=0x%llX\n", (unsigned long long)gameInst);
+    // Try reading UWorld from viewport
+    if (viewport) {
+        uint64_t uworld = Read<uint64_t>(viewport + offsets::core::ViewportClient);
+        printf("[DBG] UWorld(viewport)=0x%llX\n", (unsigned long long)uworld);
+        if (uworld) {
+            uint64_t level = Read<uint64_t>(uworld + offsets::core::PersistentLevel);
+            uint64_t gs = Read<uint64_t>(uworld + offsets::core::GameState);
+            printf("[DBG] PersistentLevel=0x%llX GameState(0x1D0)=0x%llX\n",
+                (unsigned long long)level, (unsigned long long)gs);
+            // Scan for GameState
+            printf("[DBG] Scanning for GameState near UWorld+0x1B0..0x210:\n");
+            for (uintptr_t off = 0x1B0; off <= 0x210; off += 8) {
+                uint64_t val = Read<uint64_t>(uworld + off);
+                if (val && val >= 0x7FF000000000 && val <= 0x800000000000) {
+                    uint64_t pa = Read<uint64_t>(val + 0x288);
+                    printf("[DBG]   +0x%02llX = 0x%llX  PlayerArray=0x%llX\n",
+                        (unsigned long long)off, (unsigned long long)val, (unsigned long long)pa);
+                }
+            }
+            printf("[DBG] GameInstance from UWorld+0x248=0x%llX\n",
+                (unsigned long long)Read<uint64_t>(uworld + 0x248));
+            printf("[DBG] GameInstance from viewport+0x80=0x%llX\n",
+                (unsigned long long)Read<uint64_t>(viewport + 0x80));
+            printf("[DBG] Scanning for Camera TArray near UWorld+0x180..0x1A0:\n");
+            for (uintptr_t off = 0x180; off <= 0x1A0; off += 8) {
+                uint64_t data = Read<uint64_t>(uworld + off);
+                int32_t cnt = Read<int32_t>(uworld + off + 0x8);
+                if (data && cnt > 0 && cnt < 100) {
+                    FMatrix m = Read<FMatrix>(data + 256);
+                    printf("[DBG]   +0x%02llX: data=0x%llX cnt=%d m[0][0]=%.1f\n",
+                        (unsigned long long)off, (unsigned long long)data, cnt, m.m[0][0]);
+                }
+            }
+        }
     }
 }
 
@@ -480,14 +352,11 @@ MeshCache GetMeshCache(uint64_t mesh)
 {
     MeshCache c = {};
     if (!mesh) return c;
-    // Read everything in one IOCTL (ComponentToWorld + BoneArray_cache)
-    uint8_t buf[0x668];
-    if (!ReadBuffer(mesh, buf, sizeof(buf))) return c;
-    c.rot = *(FQuat*)(buf + offsets::core::ComponentToWorld);
-    c.pos = *(FVec3*)(buf + offsets::core::ComponentToWorld + 0x20);
-    c.boneArray = *(uint64_t*)(buf + offsets::core::BoneArray_cache);
+    c.rot = Read<FQuat>(mesh + offsets::core::ComponentToWorld);
+    c.pos = Read<FVec3>(mesh + offsets::core::ComponentToWorld + 0x20);
+    c.boneArray = Read<uint64_t>(mesh + offsets::core::BoneArray_cache);
     if (!c.boneArray)
-        c.boneArray = *(uint64_t*)(buf + offsets::core::BoneArray);
+        c.boneArray = Read<uint64_t>(mesh + offsets::core::BoneArray);
     c.valid = (c.boneArray != 0);
     return c;
 }
@@ -505,16 +374,265 @@ FVec3 GetBonePosFromCache(const MeshCache& mc, int boneIdx)
 }
 
 // ============================================================
+// Aimbot
+// ============================================================
+#define M_PI 3.14159265358979323846
+
+FRotator CalculateAimAngles(FVec3 cameraPos, FVec3 targetPos, FRotator currentRot)
+{
+    FVec3 delta = { targetPos.x - cameraPos.x, targetPos.y - cameraPos.y, targetPos.z - cameraPos.z };
+    double dist = sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+    if (dist < 1.0) return currentRot;
+    double pitch = -asin(delta.z / dist) * (180.0 / M_PI);
+    double yaw = atan2(delta.y, delta.x) * (180.0 / M_PI);
+    if (pitch > 89.0) pitch = 89.0;
+    if (pitch < -89.0) pitch = -89.0;
+    if (yaw < 0.0) yaw += 360.0;
+    return { pitch, yaw, 0.0 };
+}
+
+FRotator SmoothRot(FRotator current, FRotator target, float smoothFactor)
+{
+    double dp = target.pitch - current.pitch;
+    double dy = target.yaw - current.yaw;
+    while (dy > 180.0) dy -= 360.0;
+    while (dy < -180.0) dy += 360.0;
+    current.pitch += dp * smoothFactor;
+    current.yaw += dy * smoothFactor;
+    if (current.pitch > 89.0) current.pitch = 89.0;
+    if (current.pitch < -89.0) current.pitch = -89.0;
+    if (current.yaw < 0.0) current.yaw += 360.0;
+    if (current.yaw >= 360.0) current.yaw -= 360.0;
+    return current;
+}
+
+float ScreenDistToCrosshair(FVec2 screenPos)
+{
+    float cx = (float)g_screenWidth * 0.5f;
+    float cy = (float)g_screenHeight * 0.5f;
+    float dx = screenPos.x - cx;
+    float dy = screenPos.y - cy;
+    return sqrtf(dx * dx + dy * dy);
+}
+
+void RunAimbot()
+{
+    if (!g_aim.enabled || !g_aim.masterEnabled || !g_driverReady || !g_targetPID) return;
+    if (!g_vigem.IsReady()) return;
+
+    static bool togglePrev = false;
+    bool toggleNow = (GetAsyncKeyState(g_aim.aimToggleKey) & 1) != 0;
+    if (toggleNow && !togglePrev) g_aim.masterEnabled = !g_aim.masterEnabled;
+    togglePrev = toggleNow;
+    if (!g_aim.masterEnabled) {
+        XUSB_REPORT report = {};
+        g_vigem.Update(report);
+        return;
+    }
+
+    static bool keyHeld = false;
+    static float prevNX = 0.0f, prevNY = 0.0f;
+    static int prevLockedIdx = -1;
+    static FVec3 prevTargetPos = { 0.0, 0.0, 0.0 };
+    static bool prevTargetValid = false;
+    bool keyDown = (GetAsyncKeyState(g_aim.aimKey) & 0x8000) != 0;
+    if (!keyDown) {
+        if (keyHeld) {
+            XUSB_REPORT report = {};
+            g_vigem.Update(report);
+            keyHeld = false;
+        }
+        prevNX = 0.0f; prevNY = 0.0f;
+        prevLockedIdx = -1;
+        prevTargetValid = false;
+        return;
+    }
+    if (!keyHeld) {
+        keyHeld = true;
+        prevNX = 0.0f; prevNY = 0.0f;
+        prevTargetValid = false;
+    }
+
+    const ESPFrame& frame = g_frames[g_renderFrameIdx];
+    if (!frame.hasData) return;
+
+    if ((rand() % 1000) < (int)(g_aim.randomSkip * 1000.0f)) return;
+
+    // FOV radius in pixels (matches the visual FOV circle)
+    float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
+    float bestDist = fovRadius;
+    int bestIdx = -1;
+    FVec2 bestScreen = {};
+
+    // Target stickiness: prefer current target unless another is 40% closer
+    static int lockedIdx = -1;
+    if (lockedIdx >= (int)frame.players.size()) lockedIdx = -1;
+
+    for (size_t i = 0; i < frame.players.size(); i++) {
+        const CachedPlayer& cp = frame.players[i];
+        if (!cp.valid) continue;
+        if (!g_aim.aimAtTeam && cp.pd.teamIndex == frame.localTeam && frame.localTeam != 0) continue;
+
+        FVec3 targetPos;
+        bool hasPos = false;
+        if (cp.pd.hasBones) {
+            targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
+            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+        }
+        if (!hasPos) {
+            if (cp.pd.hasBones) {
+                targetPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
+                hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+            }
+        }
+        if (!hasPos) {
+            targetPos = cp.pd.position;
+            targetPos.z += 170.0; // approximate head height when no bones
+            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+        }
+        if (!hasPos) continue;
+
+        FVec2 screen;
+        if (!WorldToScreen(targetPos, screen)) continue;
+
+        float screenDist = ScreenDistToCrosshair(screen);
+        // Bias toward locked target (40% advantage = new target must be 40% closer to steal)
+        if ((int)i == lockedIdx) screenDist *= 0.6f;
+        if (screenDist < bestDist) {
+            bestDist = screenDist;
+            bestIdx = (int)i;
+            bestScreen = screen;
+        }
+    }
+
+    if (bestIdx < 0) {
+        lockedIdx = -1;
+        XUSB_REPORT report = {};
+        g_vigem.Update(report);
+        prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
+        prevTargetValid = false;
+        return;
+    }
+    if (lockedIdx != bestIdx) {
+        prevNX = 0.0f; prevNY = 0.0f;
+        prevTargetValid = false;
+    }
+    lockedIdx = bestIdx;
+
+    // Recompute target world position for the locked target and predict ahead
+    // to compensate for the ~16ms ESP data lag (helps vs sprinting/jumping players).
+    const CachedPlayer& bestCp = frame.players[bestIdx];
+    FVec3 targetPos;
+    bool hasPos = false;
+    if (bestCp.pd.hasBones) {
+        targetPos = bestCp.pd.bones[offsets::aimbot::BONE_HEAD];
+        hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+    }
+    if (!hasPos && bestCp.pd.hasBones) {
+        targetPos = bestCp.pd.bones[offsets::aimbot::BONE_CHEST];
+        hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+    }
+    if (!hasPos) {
+        targetPos = bestCp.pd.position;
+        targetPos.z += 170.0; // approximate head height when no bones
+        hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+    }
+    if (!hasPos) return;
+
+    FVec3 aimPos = targetPos;
+    if (prevTargetValid && lockedIdx == prevLockedIdx) {
+        FVec3 velocity = {
+            targetPos.x - prevTargetPos.x,
+            targetPos.y - prevTargetPos.y,
+            targetPos.z - prevTargetPos.z
+        };
+        // Predict ~40ms ahead (2x the 20ms ESP frame time)
+        aimPos.x += velocity.x * 2.0;
+        aimPos.y += velocity.y * 2.0;
+        aimPos.z += velocity.z * 2.0;
+    }
+    prevLockedIdx = lockedIdx;
+    prevTargetPos = targetPos;
+    prevTargetValid = true;
+
+    FVec2 screen;
+    if (!WorldToScreen(aimPos, screen)) return;
+    bestScreen = screen;
+
+    // Proportional control: smooth approach, no oscillation
+    float cx = g_screenWidth * 0.5f;
+    float cy = g_screenHeight * 0.5f;
+    float dx = bestScreen.x - cx;
+    float dy = bestScreen.y - cy;
+    float pixelDist = sqrtf(dx * dx + dy * dy);
+
+    // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
+    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
+    if (pixelDist < deadzonePx) {
+        XUSB_REPORT report = {};
+        if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
+        g_vigem.Update(report);
+        prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
+        return;
+    }
+
+    // Gentler power curve for smooth mid/far tracking.
+    // Starts at a small floor so the stick always registers, rises smoothly to sensitivity.
+    float exponent = 0.45f + g_aim.smooth * 1.2f;
+    float farDist = 160.0f;
+    float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float deflection = (0.12f + 0.88f * pow(t, exponent)) * g_aim.stickSensitivity;
+
+    // Cap close-range force to prevent oscillation (max 40% within 10px)
+    if (pixelDist < 10.0f && deflection > 0.40f)
+        deflection = 0.40f;
+
+    // Distance-based soft cap: as target gets closer on-screen, lower max force.
+    // This stops side-to-side overshoot at low smoothness while still allowing far snaps.
+    float closeRange = 50.0f;
+    if (pixelDist < closeRange) {
+        float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
+        if (deflection > maxClose) deflection = maxClose;
+    }
+
+    float targetNX = (dx / pixelDist) * deflection;
+    float targetNY = (dy / pixelDist) * deflection;
+
+    // Light output smoothing to kill ESP-jitter follow
+    float alpha = 0.38f + g_aim.smooth * 0.40f;
+    if (pixelDist < 25.0f) alpha *= 0.55f; // smoother when very close
+    float nx = prevNX + (targetNX - prevNX) * alpha;
+    float ny = prevNY + (targetNY - prevNY) * alpha;
+    prevNX = nx;
+    prevNY = ny;
+
+    if (nx > 1.0f) nx = 1.0f; if (nx < -1.0f) nx = -1.0f;
+    if (ny > 1.0f) ny = 1.0f; if (ny < -1.0f) ny = -1.0f;
+
+    XUSB_REPORT report = {};
+    report.sThumbRX = (SHORT)(nx * 32767);
+    report.sThumbRY = (SHORT)(-ny * 32767);
+    g_vigem.Update(report);
+}
+
+// ============================================================
 // Outlined text helper
 // ============================================================
-void DrawText(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* text, bool centered = false)
+void DrawOutlinedText(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* text, bool centered = false)
 {
     if (centered) {
         ImVec2 sz = ImGui::CalcTextSize(text);
         pos.x -= sz.x * 0.5f;
     }
-    ImU32 bg = IM_COL32(0, 0, 0, 180);
-    dl->AddText(ImVec2(pos.x + 1, pos.y + 1), bg, text);
+    if (g_settings.outlinedText) {
+        ImU32 bg = IM_COL32(0, 0, 0, 200);
+        dl->AddText(ImVec2(pos.x - 1, pos.y), bg, text);
+        dl->AddText(ImVec2(pos.x + 1, pos.y), bg, text);
+        dl->AddText(ImVec2(pos.x, pos.y - 1), bg, text);
+        dl->AddText(ImVec2(pos.x, pos.y + 1), bg, text);
+    }
     dl->AddText(pos, col, text);
 }
 
@@ -655,18 +773,21 @@ void DrawHealthBars(ImDrawList* dl, float x, float y1, float y2, float hp, float
 // ============================================================
 // Skeleton renderer with gradient + glow
 // ============================================================
-void DrawSkeleton(ImDrawList* dl, const ScreenBone* screenBones, bool hasBones, ImU32 baseCol)
+void DrawSkeleton(ImDrawList* dl, const PlayerData& pd, ImU32 baseCol)
 {
-    if (!hasBones) return;
+    if (!pd.hasBones) return;
     struct Conn { int a, b; };
     Conn conns[] = {
         {0,1},{1,2},{2,3},{1,4},{4,5},{5,6},{1,7},{7,8},{8,9},
         {3,10},{10,11},{11,12},{3,13},{13,14},{14,15}
     };
     for (auto& cn : conns) {
-        const ScreenBone& sa = screenBones[cn.a];
-        const ScreenBone& sb = screenBones[cn.b];
-        if (!sa.visible || !sb.visible) continue;
+        const FVec3& a = pd.bones[cn.a];
+        const FVec3& b = pd.bones[cn.b];
+        if (a.x == 0.0 && a.y == 0.0 && a.z == 0.0) continue;
+        if (b.x == 0.0 && b.y == 0.0 && b.z == 0.0) continue;
+        FVec2 sa, sb;
+        if (!WorldToScreen(const_cast<FVec3&>(a), sa) || !WorldToScreen(const_cast<FVec3&>(b), sb)) continue;
 
         ImU32 lineCol = baseCol;
         if (g_settings.skeletonGradient) {
@@ -677,8 +798,8 @@ void DrawSkeleton(ImDrawList* dl, const ScreenBone* screenBones, bool hasBones, 
             lineCol = IM_COL32(r, g, bv, 255);
         }
         if (g_settings.skeletonGlow)
-            dl->AddLine({sa.s.x,sa.s.y}, {sb.s.x,sb.s.y}, IM_COL32(0,0,0,120), g_settings.skeletonLineWidth + 2.5f);
-        dl->AddLine({sa.s.x,sa.s.y}, {sb.s.x,sb.s.y}, lineCol, g_settings.skeletonLineWidth);
+            dl->AddLine({sa.x,sa.y}, {sb.x,sb.y}, IM_COL32(0,0,0,120), g_settings.skeletonLineWidth + 2.5f);
+        dl->AddLine({sa.x,sa.y}, {sb.x,sb.y}, lineCol, g_settings.skeletonLineWidth);
     }
 }
 
@@ -708,311 +829,70 @@ bool ReadFText(uint64_t addr, wchar_t* out, int maxChars)
 }
 
 // ============================================================
-// Read all player data (batched IOCTL version)
+// Read all player data
 // ============================================================
-PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos, FVec3 prePos, MeshCache& mc)
+PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos)
 {
     PlayerData pd = {};
     pd.health = 100.f;
     pd.shield = 0.f;
     pd.playerName[0] = L'\0';
-    pd.position = prePos;
+
+    uint64_t rootComp = Read<uint64_t>(pawn + offsets::core::RootComponent);
+    if (!rootComp) return pd;
+    pd.position = Read<FVec3>(rootComp + offsets::core::RelativeLocation);
 
     double dx = pd.position.x - localPos.x;
     double dy = pd.position.y - localPos.y;
     double dz = pd.position.z - localPos.z;
     pd.distance = sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
 
-    // Batch: read entire pawn block in ONE IOCTL
-    uint8_t pawnBuf[0x2178];
-    if (!ReadBuffer(pawn, pawnBuf, sizeof(pawnBuf)))
-        return pd;
+    pd.teamIndex = Read<uint8_t>(playerState + offsets::player::TeamIndex);
+    pd.killScore = Read<int32_t>(playerState + offsets::player::KillScore);
+    pd.isBot = (Read<uint8_t>(playerState + offsets::player::bIsABot) & 0x8) != 0;
+    pd.isKnocked = (Read<uint8_t>(pawn + offsets::player::bIsDBNO) & 0x80) != 0;
+    pd.isCrouched = (Read<uint8_t>(pawn + offsets::player::bIsCrouched) & 0x2) != 0;
+    pd.isSliding = (Read<uint8_t>(pawn + offsets::player::bIsSliding) & 0x10) != 0;
+    pd.isSkydiving = (Read<uint8_t>(pawn + offsets::player::bIsSkydiving) & 0x1) != 0;
 
-    // Batch: read player state
-    uint8_t psBuf[0xF30 + 8];
-    if (ReadBuffer(playerState, psBuf, sizeof(psBuf))) {
-        pd.teamIndex = psBuf[offsets::player::TeamIndex];
-        pd.killScore = *(int32_t*)(psBuf + offsets::player::KillScore);
-        pd.isBot = (psBuf[offsets::player::bIsABot] & 0x8) != 0;
-    }
-
-    pd.isKnocked   = (pawnBuf[offsets::player::bIsDBNO] & 0x80) != 0;
-    pd.isCrouched  = (pawnBuf[offsets::player::bIsCrouched] & 0x2) != 0;
-    pd.isSliding   = (pawnBuf[offsets::player::bIsSliding] & 0x10) != 0;
-    pd.isSkydiving = (pawnBuf[offsets::player::bIsSkydiving] & 0x1) != 0;
-    pd.isInVehicle = (pawnBuf[offsets::player::bIsDying] & 0x20) != 0;
-
-    uint64_t weapon = *(uint64_t*)(pawnBuf + offsets::player::CurrentWeapon);
+    uint64_t weapon = Read<uint64_t>(pawn + offsets::player::CurrentWeapon);
     if (weapon) {
-        uint8_t wBuf[0x10B0];
-        if (ReadBuffer(weapon, wBuf, sizeof(wBuf))) {
-            uint64_t wData = *(uint64_t*)(wBuf + offsets::weapon::WeaponData);
-            if (wData) ReadFText(wData + offsets::weapon::ItemName, pd.weaponName, 128);
-            pd.ammoCount = *(int32_t*)(wBuf + offsets::weapon::AmmoCount);
-            pd.isReloading = (wBuf[offsets::weapon::bIsReloading] & 0x1) != 0;
-        }
+        uint64_t wData = Read<uint64_t>(weapon + offsets::weapon::WeaponData);
+        if (wData) ReadFText(wData + offsets::weapon::ItemName, pd.weaponName, 128);
+        pd.ammoCount = Read<int32_t>(weapon + offsets::weapon::AmmoCount);
+        pd.isReloading = (Read<uint8_t>(weapon + offsets::weapon::bIsReloading) & 0x1) != 0;
     }
 
-    uint64_t mesh = *(uint64_t*)(pawnBuf + offsets::player::Mesh);
-    mc = GetMeshCache(mesh);
-    pd.hasBones = mc.valid;
-    if (mc.valid) {
-        int ids[16] = { BONE_HEAD, BONE_NECK, BONE_CHEST, BONE_PELVIS,
-            BONE_L_SHOULDER, BONE_L_ELBOW, BONE_L_HAND,
-            BONE_R_SHOULDER, BONE_R_ELBOW, BONE_R_HAND,
-            BONE_L_THIGH, BONE_L_KNEE, BONE_L_FOOT,
-            BONE_R_THIGH, BONE_R_KNEE, BONE_R_FOOT };
-
-        uint8_t boneBuf[0x3000];
-        if (ReadBuffer(mc.boneArray, boneBuf, sizeof(boneBuf))) {
-            for (int j = 0; j < 16; j++) {
-                uint32_t off = ids[j] * 0x60 + 0x20;
-                if (off + 24 > sizeof(boneBuf)) continue;
-                FVec3 boneLocal = *(FVec3*)(boneBuf + off);
-                FVec3 rotated = RotateByQuat(boneLocal, mc.rot);
-                pd.bones[j].x = rotated.x + mc.pos.x;
-                pd.bones[j].y = rotated.y + mc.pos.y;
-                pd.bones[j].z = rotated.z + mc.pos.z;
+    pd.hasBones = false;
+    if (pd.distance < 350.0f) {
+        uint64_t mesh = Read<uint64_t>(pawn + offsets::player::Mesh);
+        if (mesh) {
+            MeshCache mc = GetMeshCache(mesh);
+            if (mc.valid) {
+                // Full skeleton only for close players; far players only need head for aimbot
+                if (pd.distance < 100.0f) {
+                    int ids[] = { BONE_HEAD, BONE_NECK, BONE_CHEST, BONE_PELVIS,
+                        BONE_L_SHOULDER, BONE_L_ELBOW, BONE_L_HAND,
+                        BONE_R_SHOULDER, BONE_R_ELBOW, BONE_R_HAND,
+                        BONE_L_THIGH, BONE_L_KNEE, BONE_L_FOOT,
+                        BONE_R_THIGH, BONE_R_KNEE, BONE_R_FOOT };
+                    for (int j = 0; j < 16; j++)
+                        pd.bones[j] = GetBonePosFromCache(mc, ids[j]);
+                    pd.hasBones = (pd.bones[0].x != 0.0 || pd.bones[0].y != 0.0 || pd.bones[0].z != 0.0);
+                } else {
+                    // Mid/far: just read head to save driver calls
+                    pd.bones[0] = GetBonePosFromCache(mc, BONE_HEAD);
+                    pd.hasBones = (pd.bones[0].x != 0.0 || pd.bones[0].y != 0.0 || pd.bones[0].z != 0.0);
+                }
             }
         }
-        pd.hasBones = (pd.bones[0].x != 0.0 || pd.bones[0].y != 0.0 || pd.bones[0].z != 0.0);
     }
     return pd;
 }
 
 // ============================================================
-// Aimbot
+// Background ESP data collection
 // ============================================================
-#define M_PI 3.14159265358979323846
-
-FVec3 GetCameraLocation()
-{
-    uint64_t uworld = GetUWorld();
-    if (!uworld) return {};
-
-    static int dbgC = 0;
-    bool dbgP = (++dbgC % 240) == 0;
-    if (dbgC > 100000) dbgC = 0;
-
-    // Method 1: scan CachedViewInfoRenderedLastFrame from 0 to 0x1800
-    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
-    if (viewArrayData) {
-        for (uint32_t off = 0; off < 0x1800; off += 0x40) {
-            FVec3 loc = Read<FVec3>(viewArrayData + off);
-            if (fabs(loc.x) > 1.0 && fabs(loc.x) < 1000000.0 &&
-                fabs(loc.y) > 1.0 && fabs(loc.y) < 1000000.0 &&
-                fabs(loc.z) > 1.0 && fabs(loc.z) < 1000000.0) {
-                if (dbgP) printf("[CAM] viewArray+0x%X: (%.0f,%.0f,%.0f)\n",
-                    off, loc.x, loc.y, loc.z);
-                return loc;
-            }
-        }
-    }
-
-    // Method 2: read from PlayerController -> CameraManager -> POV
-    if (g_targetPID) {
-        uint64_t gameInstance = Read<uint64_t>(uworld + offsets::core::GameInstance);
-        if (gameInstance) {
-            uint64_t localPlayers = Read<uint64_t>(gameInstance + offsets::player::LocalPlayers);
-            if (localPlayers) {
-                uint64_t localPlayer = Read<uint64_t>(localPlayers);
-                if (localPlayer) {
-                    uint64_t pc = Read<uint64_t>(localPlayer + offsets::player::PlayerController);
-                    if (pc) {
-                        uint64_t cm = Read<uint64_t>(pc + offsets::core::CameraManager);
-                        if (cm) {
-                            FVec3 loc = Read<FVec3>(cm + offsets::core::POV_Location);
-                            if (fabs(loc.x) > 1.0 && fabs(loc.x) < 1000000.0 &&
-                                fabs(loc.y) > 1.0 && fabs(loc.y) < 1000000.0 &&
-                                fabs(loc.z) > 1.0 && fabs(loc.z) < 1000000.0) {
-                                if (dbgP) printf("[CAM] CameraManager POV: (%.0f,%.0f,%.0f)\n",
-                                    loc.x, loc.y, loc.z);
-                                return loc;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return {};
-}
-
-FRotator CalculateAimAngles(FVec3 cameraPos, FVec3 targetPos, FRotator currentRot)
-{
-    FVec3 delta;
-    delta.x = targetPos.x - cameraPos.x;
-    delta.y = targetPos.y - cameraPos.y;
-    delta.z = targetPos.z - cameraPos.z;
-
-    double dist = sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
-    if (dist < 1.0) return currentRot;
-
-    double pitch = -asin(delta.z / dist) * (180.0 / M_PI);
-    double yaw   = atan2(delta.y, delta.x) * (180.0 / M_PI);
-
-    if (pitch > 89.0)  pitch = 89.0;
-    if (pitch < -89.0) pitch = -89.0;
-    if (yaw < 0.0)     yaw += 360.0;
-
-    return { pitch, yaw, 0.0 };
-}
-
-FRotator SmoothRot(FRotator current, FRotator target, float smoothFactor)
-{
-    double dp = target.pitch - current.pitch;
-    double dy = target.yaw - current.yaw;
-
-    while (dy > 180.0)  dy -= 360.0;
-    while (dy < -180.0) dy += 360.0;
-
-    current.pitch += dp * smoothFactor;
-    current.yaw   += dy * smoothFactor;
-
-    if (current.pitch > 89.0)  current.pitch = 89.0;
-    if (current.pitch < -89.0) current.pitch = -89.0;
-    if (current.yaw < 0.0)     current.yaw += 360.0;
-    if (current.yaw >= 360.0)  current.yaw -= 360.0;
-
-    return current;
-}
-
-float ScreenDistToCrosshair(FVec2 screenPos)
-{
-    float cx = (float)g_screenWidth * 0.5f;
-    float cy = (float)g_screenHeight * 0.5f;
-    float dx = screenPos.x - cx;
-    float dy = screenPos.y - cy;
-    return sqrtf(dx * dx + dy * dy);
-}
-
-void RunAimbot()
-{
-    if (!g_aim.enabled || !g_aim.masterEnabled || !g_driverReady || !g_targetPID) return;
-    if (!g_vigem.IsReady()) return;
-
-    // Toggle master switch with 'P'
-    static bool togglePrev = false;
-    bool toggleNow = (GetAsyncKeyState(g_aim.aimToggleKey) & 1) != 0;
-    if (toggleNow && !togglePrev) g_aim.masterEnabled = !g_aim.masterEnabled;
-    togglePrev = toggleNow;
-    if (!g_aim.masterEnabled) {
-        XUSB_REPORT report = {};
-        g_vigem.Update(report);
-        return;
-    }
-
-    static bool keyHeld = false;
-    bool keyDown = (GetAsyncKeyState(g_aim.aimKey) & 0x8000) != 0;
-    if (!keyDown) {
-        if (keyHeld) {
-            XUSB_REPORT report = {};
-            g_vigem.Update(report);
-            keyHeld = false;
-        }
-        return;
-    }
-    if (!keyHeld) {
-        keyHeld = true;
-    }
-
-    const ESPFrame& frame = g_frames[g_renderFrameIdx];
-    if (!frame.hasData) return;
-
-    if ((rand() % 1000) < (int)(g_aim.randomSkip * 1000.0f)) return;
-
-    // FOV radius in pixels (matches the visual FOV circle)
-    float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
-    float bestDist = fovRadius;
-    int bestIdx = -1;
-    FVec2 bestScreen = {};
-
-    // Target stickiness: prefer current target unless another is 40% closer
-    static int lockedIdx = -1;
-    if (lockedIdx >= (int)frame.players.size()) lockedIdx = -1;
-
-    for (size_t i = 0; i < frame.players.size(); i++) {
-        const CachedPlayer& cp = frame.players[i];
-        if (!cp.valid) continue;
-        if (!g_aim.aimAtTeam && cp.pd.teamIndex == frame.localTeam && frame.localTeam != 0) continue;
-
-        FVec3 targetPos;
-        bool hasPos = false;
-        if (cp.pd.hasBones) {
-            targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-            // At longer ranges, aim slightly above the head to center on hitbox
-            if (cp.pd.distance > 150.0) {
-                targetPos.z += (cp.pd.distance - 150.0) * 0.15;
-                if (targetPos.z - cp.pd.bones[offsets::aimbot::BONE_HEAD].z > 60.0)
-                    targetPos.z = cp.pd.bones[offsets::aimbot::BONE_HEAD].z + 60.0;
-            }
-            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
-        }
-        if (!hasPos) {
-            if (cp.pd.hasBones) {
-                targetPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
-                hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
-            }
-        }
-        if (!hasPos) {
-            targetPos = cp.pd.position;
-            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
-        }
-        if (!hasPos) continue;
-
-        FVec2 screen;
-        if (!WorldToScreen(targetPos, screen)) continue;
-
-        float screenDist = ScreenDistToCrosshair(screen);
-        // Bias toward locked target (40% advantage = new target must be 40% closer to steal)
-        if ((int)i == lockedIdx) screenDist *= 0.6f;
-        if (screenDist < bestDist) {
-            bestDist = screenDist;
-            bestIdx = (int)i;
-            bestScreen = screen;
-        }
-    }
-
-    if (bestIdx < 0) { lockedIdx = -1; return; }
-    lockedIdx = bestIdx;
-
-    // Proportional control: smooth approach, no oscillation
-    float cx = g_screenWidth * 0.5f;
-    float cy = g_screenHeight * 0.5f;
-    float dx = bestScreen.x - cx;
-    float dy = bestScreen.y - cy;
-    float pixelDist = sqrtf(dx * dx + dy * dy);
-
-    // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
-    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
-    if (pixelDist < deadzonePx) {
-        XUSB_REPORT report = {};
-        g_vigem.Update(report);
-        return;
-    }
-
-    // Power curve exponent: 0.15 (OP snap) .. 1.0 (linear smooth)
-    float exponent = 0.15f + g_aim.smooth * 1.7f;
-    float t = (pixelDist - deadzonePx) / (100.0f - deadzonePx);
-    if (t > 1.0f) t = 1.0f;
-    float deflection = pow(t, exponent) * g_aim.stickSensitivity;
-
-    // Cap close-range force to prevent oscillation (max 40% within 10px)
-    if (pixelDist < 10.0f && deflection > 0.40f)
-        deflection = 0.40f;
-
-    float nx = (dx / pixelDist) * deflection;
-    float ny = (dy / pixelDist) * deflection;
-
-    if (nx > 1.0f) nx = 1.0f; if (nx < -1.0f) nx = -1.0f;
-    if (ny > 1.0f) ny = 1.0f; if (ny < -1.0f) ny = -1.0f;
-
-    XUSB_REPORT report = {};
-    report.sThumbRX = (SHORT)(nx * 32767);
-    report.sThumbRY = (SHORT)(-ny * 32767);
-    g_vigem.Update(report);
-}
 void CollectESPData(ESPFrame& frame)
 {
     frame.hasData = false;
@@ -1023,60 +903,6 @@ void CollectESPData(ESPFrame& frame)
     if (!g_settings.enabled || !g_driverReady || !g_targetPID) return;
 
     uint64_t uworld = GetUWorld();
-    if (g_settings.showDebug) {
-        char* p = g_debugPtr;
-        size_t rem = sizeof(g_debugPtr);
-        int n = 0;
-        #define DBG(fmt, ...) do { n = snprintf(p, rem, fmt, ##__VA_ARGS__); if (n > 0) { p += n; rem -= n; if (rem < 16) rem = 0; } } while(0)
-        DBG("=== Pointer Chain Debug ===\n");
-        DBG("GWorld ptr: 0x%llX\n", (unsigned long long)(g_gameBase + offsets::core::GWorld));
-        DBG("UWorld decrypt: XOR 0x%llX + byteswap\n", (unsigned long long)offsets::uworld::kMask);
-        DBG("gameBase=0x%llX\n\n", (unsigned long long)g_gameBase);
-        uint64_t ue = Read<uint64_t>(g_gameBase + offsets::core::GWorld);
-        DBG("[1] UWorld: enc=0x%llX dec=0x%llX %s\n",
-            (unsigned long long)ue, (unsigned long long)uworld, uworld ? "OK" : "FAIL");
-        uint64_t gs_ = uworld ? Read<uint64_t>(uworld + 0x130) : 0;
-        DBG("[2] GameState (+0x130): 0x%llX %s\n", (unsigned long long)gs_, gs_ ? "OK" : "FAIL");
-        uint64_t pl_ = uworld ? Read<uint64_t>(uworld + 0x238) : 0;
-        uint32_t pc_ = pl_ ? Read<uint32_t>(uworld + 0x238 + 0x8) : 0;
-        DBG("[3] PlayerArray (+0x238): 0x%llX cnt=%u\n", (unsigned long long)pl_, pc_);
-        uint64_t gi_ = uworld ? Read<uint64_t>(uworld + 0x190) : 0;
-        DBG("[4] GameInstance (+0x190): 0x%llX %s\n", (unsigned long long)gi_, gi_ ? "OK" : "FAIL");
-        uint64_t lpArr_ = gi_ ? Read<uint64_t>(gi_ + 0x38) : 0;
-        DBG("[5] LocalPlayers (+0x38): 0x%llX %s\n", (unsigned long long)lpArr_, lpArr_ ? "OK" : "FAIL");
-        uint64_t lp_ = lpArr_ ? Read<uint64_t>(lpArr_) : 0;
-        DBG("[6] LocalPlayer[0]: 0x%llX %s\n", (unsigned long long)lp_, lp_ ? "OK" : "FAIL");
-        uint64_t pc__ = lp_ ? Read<uint64_t>(lp_ + 0x30) : 0;
-        DBG("[7] PlayerController (+0x30): 0x%llX %s\n", (unsigned long long)pc__, pc__ ? "OK" : "FAIL");
-        uint64_t cm_ = pc__ ? Read<uint64_t>(pc__ + 0x2B8) : 0;
-        DBG("[8] CameraManager (+0x2B8): 0x%llX %s\n", (unsigned long long)cm_, cm_ ? "OK" : "FAIL");
-        FVec3 povLoc = cm_ ? Read<FVec3>(cm_ + 0x1A68) : FVec3{};
-        DBG("[9] POV_Location (+0x1A68): (%.0f, %.0f, %.0f)\n", povLoc.x, povLoc.y, povLoc.z);
-        uint64_t pawn_ = pc__ ? Read<uint64_t>(pc__ + 0x718) : 0;
-        DBG("[10] LocalPawn (+0x718): 0x%llX %s\n", (unsigned long long)pawn_, pawn_ ? "OK" : "FAIL");
-        uint64_t mesh_ = pawn_ ? Read<uint64_t>(pawn_ + 0x280) : 0;
-        DBG("[11] Mesh (+0x280): 0x%llX %s\n", (unsigned long long)mesh_, mesh_ ? "OK" : "FAIL");
-        uint64_t root_ = pawn_ ? Read<uint64_t>(pawn_ + 0x130) : 0;
-        DBG("[12] RootComponent (+0x130): 0x%llX %s\n", (unsigned long long)root_, root_ ? "OK" : "FAIL");
-        uint64_t ps_ = pawn_ ? Read<uint64_t>(pawn_ + 0x240) : 0;
-        DBG("[13] PlayerState (+0x240): 0x%llX %s\n", (unsigned long long)ps_, ps_ ? "OK" : "FAIL");
-        uint8_t team_ = ps_ ? Read<uint8_t>(ps_ + 0xE68) : 0;
-        DBG("[14] TeamIndex (+0xE68): %u\n", team_);
-        uint64_t wep_ = pawn_ ? Read<uint64_t>(pawn_ + 0x5A0) : 0;
-        DBG("[15] CurrentWeapon (+0x5A0): 0x%llX %s\n", (unsigned long long)wep_, wep_ ? "OK" : "FAIL");
-        uint8_t dying_ = pawn_ ? Read<uint8_t>(pawn_ + 0x538) : 0;
-        DBG("[16] bIsDying byte (+0x538): 0x%02X\n", dying_);
-        uint8_t dbno_ = pawn_ ? Read<uint8_t>(pawn_ + 0x552) : 0;
-        DBG("[17] bIsDBNO byte (+0x552): 0x%02X\n", dbno_);
-        uint64_t viewArr_ = uworld ? Read<uint64_t>(uworld + 0x1A0) : 0;
-        uint32_t viewCnt_ = uworld ? Read<uint32_t>(uworld + 0x1A0 + 0x8) : 0;
-        DBG("[18] CachedViewInfo (+0x1A0): 0x%llX cnt=%u\n", (unsigned long long)viewArr_, viewCnt_);
-        uint64_t plv_ = uworld ? Read<uint64_t>(uworld + 0x30) : 0;
-        DBG("[19] PersistentLevel (+0x30): 0x%llX %s\n", (unsigned long long)plv_, plv_ ? "OK" : "FAIL");
-        DBG("\n=== End ===\n");
-        #undef DBG
-    }
-
     if (!uworld) return;
 
     uint64_t gameState = Read<uint64_t>(uworld + offsets::core::GameState);
@@ -1087,7 +913,7 @@ void CollectESPData(ESPFrame& frame)
     if (!playerArrayData || playerCount <= 0 || playerCount > 200) return;
     frame.playerCount = playerCount;
 
-    uint64_t gameInstance = Read<uint64_t>(uworld + offsets::core::GameInstance);
+    uint64_t gameInstance = GetGameInstance();
     if (!gameInstance) return;
     uint64_t localPlayersArr = Read<uint64_t>(gameInstance + offsets::player::LocalPlayers);
     if (!localPlayersArr) return;
@@ -1099,16 +925,8 @@ void CollectESPData(ESPFrame& frame)
 
     uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
     int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
-    if (viewArrayData && viewArrayCount > 0) {
-        frame.viewProj = Read<FMatrix>(viewArrayData + 256);
-        if (frame.viewProj.m[3][3] == 0.0) {
-            for (uint32_t off = 0; off < 0x1800; off += 0x40) {
-                frame.viewProj = Read<FMatrix>(viewArrayData + off);
-                if (frame.viewProj.m[3][3] != 0.0 && fabs(frame.viewProj.m[3][3]) < 100.0) break;
-            }
-        }
-        g_viewProjectionMatrix = frame.viewProj;
-    }
+    if (!viewArrayData || viewArrayCount <= 0) return;
+    frame.viewProj = Read<FMatrix>(viewArrayData + 256);
 
     FVec3 localPos = {};
     frame.localTeam = 0;
@@ -1128,10 +946,8 @@ void CollectESPData(ESPFrame& frame)
                     BONE_R_SHOULDER, BONE_R_ELBOW, BONE_R_HAND,
                     BONE_L_THIGH, BONE_L_KNEE, BONE_L_FOOT,
                     BONE_R_THIGH, BONE_R_KNEE, BONE_R_FOOT };
-                for (int j = 0; j < 16; j++) {
+                for (int j = 0; j < 16; j++)
                     frame.localPlayer.bones[j] = GetBonePosFromCache(localMC, ids[j]);
-                    frame.localScreenBones[j].visible = WorldToScreen(frame.localPlayer.bones[j], frame.localScreenBones[j].s);
-                }
                 frame.localPlayer.hasBones = true;
                 frame.localPlayer.position = localPos;
                 frame.hasLocalPlayer = true;
@@ -1139,7 +955,7 @@ void CollectESPData(ESPFrame& frame)
         }
     }
 
-    int limit = playerCount < 100 ? playerCount : 100;
+    int limit = playerCount < 48 ? playerCount : 48;
     frame.players.reserve(limit);
 
     for (int i = 0; i < limit; i++) {
@@ -1149,36 +965,24 @@ void CollectESPData(ESPFrame& frame)
         uint64_t pawn = Read<uint64_t>(playerState + offsets::player::PawnPrivate);
         if (!pawn || pawn == localPawn) continue;
 
-        uint8_t pawnFlags = Read<uint8_t>(pawn + offsets::player::bIsDying);
-        // bit 0-2 = dead/eliminated, bit 5 = in vehicle
-        if (pawnFlags & 0x07) continue;
+        uint8_t dyingByte = Read<uint8_t>(pawn + offsets::player::bIsDying);
+        if (dyingByte & 0x20) continue;
 
-        // Quick position check (1 IOCTL: read rootComp + position)
-        FVec3 pos{};
-        {
-            uint64_t rc = Read<uint64_t>(pawn + offsets::core::RootComponent);
-            if (!rc) continue;
-            ReadBuffer(rc + offsets::core::RelativeLocation, &pos, 24);
-        }
-        double dx = pos.x - localPos.x, dy = pos.y - localPos.y, dz = pos.z - localPos.z;
-        double dist = sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        // Quick distance check before expensive read
+        uint64_t rootComp = Read<uint64_t>(pawn + offsets::core::RootComponent);
+        if (!rootComp) continue;
+        FVec3 pos = Read<FVec3>(rootComp + offsets::core::RelativeLocation);
+        if (pos.x == 0.0 && pos.y == 0.0 && pos.z == 0.0) continue;
+        double dx2 = pos.x - localPos.x, dy2 = pos.y - localPos.y, dz2 = pos.z - localPos.z;
+        double dist = sqrt(dx2 * dx2 + dy2 * dy2 + dz2 * dz2) / 100.0;
         if (dist > g_settings.maxDistance || dist < 1.0) continue;
 
-        MeshCache mc = {};
-        PlayerData pd = ReadPlayerDataFor(playerState, pawn, localPos, pos, mc);
-        if (pd.distance == 0.0) continue;
+        PlayerData pd = ReadPlayerDataFor(playerState, pawn, localPos);
+        if (pd.position.x == 0.0 && pd.position.y == 0.0 && pd.position.z == 0.0) continue;
 
-        // Pre-project bones to screen coords (avoids W2S in render thread)
         CachedPlayer cp = {};
         cp.pd = pd;
         cp.valid = true;
-        cp.screenBaseValid = WorldToScreen(pd.position, cp.screenBase);
-        if (pd.hasBones) {
-            for (int j = 0; j < 16; j++) {
-                cp.screenBones[j].visible = WorldToScreen(pd.bones[j], cp.screenBones[j].s);
-            }
-        }
-
         frame.players.push_back(cp);
     }
     frame.hasData = true;
@@ -1189,10 +993,28 @@ void ESPThreadFunc()
     while (g_espThreadRunning.load()) {
         int writeIdx = 1 - g_readIdx.load();
         CollectESPData(g_frames[writeIdx]);
+        if (g_frames[writeIdx].hasData) {
+            g_playerCount = g_frames[writeIdx].playerCount;
+        }
         g_readIdx.store(writeIdx);
-        g_playerCount = g_frames[writeIdx].playerCount;
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+}
+
+// ============================================================
+// Read current camera view matrix from the game (render-thread)
+// ============================================================
+FMatrix GetCurrentViewProj()
+{
+    if (!g_targetPID) return g_frames[g_renderFrameIdx].viewProj;
+    uint64_t uworld = GetUWorld();
+    if (!uworld) return g_frames[g_renderFrameIdx].viewProj;
+    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
+    int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
+    if (!viewArrayData || viewArrayCount <= 0) return g_frames[g_renderFrameIdx].viewProj;
+    FMatrix mat = Read<FMatrix>(viewArrayData + 256);
+    if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
+    return mat;
 }
 
 // ============================================================
@@ -1205,7 +1027,8 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    g_viewProjectionMatrix = frame.viewProj;
+    // Use the CURRENT camera matrix so ESP doesn't lag behind when the player moves the mouse
+    g_viewProjectionMatrix = GetCurrentViewProj();
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
@@ -1214,53 +1037,37 @@ void RenderESP()
 
         ImU32 color = GetPlayerColor(pd, frame.localTeam);
 
-        // Off-screen culling: skip players clearly outside the viewport
-        bool onScreen = false;
-        if (pd.hasBones) {
-            for (int j = 0; j < 16; j += 4) {
-                if (cp.screenBones[j].visible) {
-                    FVec2 s = cp.screenBones[j].s;
-                    if (s.x > -200 && s.x < g_screenWidth + 200 && s.y > -200 && s.y < g_screenHeight + 200) {
-                        onScreen = true; break;
-                    }
-                }
-            }
-        } else if (cp.screenBaseValid) {
-            FVec2 s = cp.screenBase;
-            onScreen = (s.x > -200 && s.x < g_screenWidth + 200 && s.y > -200 && s.y < g_screenHeight + 200);
-        }
-        if (!onScreen) continue;
-
-        if (g_settings.showSkeleton)
-            DrawSkeleton(draw, cp.screenBones, pd.hasBones, color);
+        if (g_settings.showSkeleton && pd.distance < 150.0f)
+            DrawSkeleton(draw, pd, color);
 
         float minX = 99999, minY = 99999, maxX = -99999, maxY = -99999;
         int projected = 0;
         if (pd.hasBones) {
-            for (int j = 0; j < 16; j++) {
-                if (!cp.screenBones[j].visible) continue;
-                FVec2 sp = cp.screenBones[j].s;
-                if (sp.x < minX) minX = sp.x;
-                if (sp.y < minY) minY = sp.y;
-                if (sp.x > maxX) maxX = sp.x;
-                if (sp.y > maxY) maxY = sp.y;
-                projected++;
+            int cornerBones[] = { 0, 3, 4, 7 };
+            for (int j = 0; j < 4; j++) {
+                int idx = cornerBones[j];
+                if (pd.bones[idx].x == 0.0 && pd.bones[idx].y == 0.0 && pd.bones[idx].z == 0.0) continue;
+                FVec2 sp;
+                if (WorldToScreen(pd.bones[idx], sp)) {
+                    if (sp.x < minX) minX = sp.x;
+                    if (sp.y < minY) minY = sp.y;
+                    if (sp.x > maxX) maxX = sp.x;
+                    if (sp.y > maxY) maxY = sp.y;
+                    projected++;
+                }
             }
         }
         if (projected < 4) {
-            if (cp.screenBaseValid) {
-                FVec2 sh = cp.screenBase;
-                float bH = 90.0f;
-                FVec2 sf;
-                FVec3 footPos = pd.position; footPos.z -= 15.0;
-                if (WorldToScreen(footPos, sf)) {
-                    bH = sf.y - sh.y;
-                    if (bH > 5.0f) {
-                        float bW = bH * 0.5f;
-                        minX = sh.x - bW / 2; maxX = sh.x + bW / 2;
-                        minY = sh.y; maxY = sf.y;
-                        projected = 4;
-                    }
+            FVec3 headPos = pd.position; headPos.z += 180.0;
+            FVec3 footPos = pd.position; footPos.z -= 15.0;
+            FVec2 sh, sf;
+            if (WorldToScreen(headPos, sh) && WorldToScreen(footPos, sf)) {
+                float bH = sf.y - sh.y;
+                if (bH > 5.0f) {
+                    float bW = bH * 0.5f;
+                    minX = sh.x - bW / 2; maxX = sh.x + bW / 2;
+                    minY = sh.y; maxY = sf.y;
+                    projected = 4;
                 }
             }
         }
@@ -1286,17 +1093,13 @@ void RenderESP()
             float textY = minY;
 
             if (g_settings.showStatusIndicators) {
-                if (pd.isInVehicle) {
-                    textY -= 14.f;
-                    DrawText(draw, {centerX, textY}, IM_COL32(100,200,255,255), "[VEHICLE]", true);
-                }
                 if (pd.isKnocked) {
                     textY -= 14.f;
-                    DrawText(draw, {centerX, textY}, IM_COL32(255,80,80,255), "[KNOCKED]", true);
+                    DrawOutlinedText(draw, {centerX, textY}, IM_COL32(255,80,80,255), "[KNOCKED]", true);
                 }
                 if (pd.isBot) {
                     textY -= 14.f;
-                    DrawText(draw, {centerX, textY}, IM_COL32(255,220,50,255), "[BOT]", true);
+                    DrawOutlinedText(draw, {centerX, textY}, IM_COL32(255,220,50,255), "[BOT]", true);
                 }
             }
 
@@ -1306,18 +1109,18 @@ void RenderESP()
                 if (pd.playerName[0] != L'\0')
                     WideCharToMultiByte(CP_UTF8, 0, pd.playerName, -1, nameUtf8, sizeof(nameUtf8), nullptr, nullptr);
                 if (nameUtf8[0])
-                    DrawText(draw, {centerX, textY}, IM_COL32(255,255,255,255), nameUtf8, true);
+                    DrawOutlinedText(draw, {centerX, textY}, IM_COL32(255,255,255,255), nameUtf8, true);
                 else if (pd.isBot)
-                    DrawText(draw, {centerX, textY}, IM_COL32(255,255,255,255), "Bot", true);
+                    DrawOutlinedText(draw, {centerX, textY}, IM_COL32(255,255,255,255), "Bot", true);
                 else
-                    DrawText(draw, {centerX, textY}, IM_COL32(255,255,255,255), "Player", true);
+                    DrawOutlinedText(draw, {centerX, textY}, IM_COL32(255,255,255,255), "Player", true);
             }
 
             float botY = maxY + 2.f;
             if (g_settings.showDistance) {
                 char txt[32];
                 sprintf_s(txt, "%.0fm", pd.distance);
-                DrawText(draw, {centerX, botY}, IM_COL32(255,255,255,255), txt, true);
+                DrawOutlinedText(draw, {centerX, botY}, IM_COL32(255,255,255,255), txt, true);
                 botY += 14.f;
             }
 
@@ -1327,9 +1130,9 @@ void RenderESP()
                 if (pd.ammoCount > 0) {
                     char buf[300];
                     sprintf_s(buf, "%s [%d]", utf8, pd.ammoCount);
-                    DrawText(draw, {centerX, botY}, IM_COL32(200,200,200,255), buf, true);
+                    DrawOutlinedText(draw, {centerX, botY}, IM_COL32(200,200,200,255), buf, true);
                 } else {
-                    DrawText(draw, {centerX, botY}, IM_COL32(200,200,200,255), utf8, true);
+                    DrawOutlinedText(draw, {centerX, botY}, IM_COL32(200,200,200,255), utf8, true);
                 }
                 botY += 14.f;
             }
@@ -1337,7 +1140,7 @@ void RenderESP()
             if (g_settings.showKillCount && pd.killScore > 0) {
                 char txt[32];
                 sprintf_s(txt, "%d kills", pd.killScore);
-                DrawText(draw, {centerX, botY}, IM_COL32(255,200,100,255), txt, true);
+                DrawOutlinedText(draw, {centerX, botY}, IM_COL32(255,200,100,255), txt, true);
             }
         }
 
@@ -1350,20 +1153,7 @@ void RenderESP()
 
     if (frame.hasLocalPlayer && g_settings.showLocalSkeleton) {
         ImU32 localColor = IM_COL32(0, 255, 255, 255);
-        DrawSkeleton(draw, frame.localScreenBones, frame.localPlayer.hasBones, localColor);
-    }
-
-    // FOV Circle
-    if (g_settings.showFovCircle && g_aim.enabled) {
-        float cx = g_screenWidth * 0.5f;
-        float cy = g_screenHeight * 0.5f;
-        float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
-        ImU32 fovCol = IM_COL32(255, 255, 255, 80);
-        draw->AddCircle(ImVec2(cx, cy), fovRadius, fovCol, 64, g_settings.fovCircleThickness);
-        // Crosshair lines
-        float crossLen = 8.0f;
-        draw->AddLine(ImVec2(cx - crossLen, cy), ImVec2(cx + crossLen, cy), IM_COL32(255,255,255,60), 1.0f);
-        draw->AddLine(ImVec2(cx, cy - crossLen), ImVec2(cx, cy + crossLen), IM_COL32(255,255,255,60), 1.0f);
+        DrawSkeleton(draw, frame.localPlayer, localColor);
     }
 }
 
@@ -1373,8 +1163,8 @@ void RenderESP()
 bool InitializeDriver()
 {
     printf("[+] Opening driver device...\n");
-    xhdr::g_dev = CreateFileW(L"\\\\.\\xhunter1", GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    xhdr::g_dev = CreateFileW(L"\\\\.\\xHunters", GENERIC_READ | GENERIC_WRITE,
+        0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (xhdr::g_dev == INVALID_HANDLE_VALUE) {
         printf("[-] Driver not found! Error: %lu\n", GetLastError());
         return false;
@@ -1389,156 +1179,92 @@ bool InitializeDriver()
         printf("[-] CMD_SET_FLAGS failed\n"); return false;
     }
     printf("[+] Authenticated!\n");
+
+    if (!NtoskrnlParser::Resolve(xhdr::g_off)) {
+        printf("[-] EPROCESS offsets failed\n"); return false;
+    }
+    xhdr::g_off.Dump();
+
+    xhdr::g_ntBase = xhdr::GetNtoskrnlBase();
+    if (!xhdr::g_ntBase) { printf("[-] ntoskrnl base failed\n"); return false; }
+    printf("[+] ntoskrnl: 0x%llX\n", xhdr::g_ntBase);
+
+    uint64_t ptr = xhdr::g_ntBase + xhdr::g_off.PsInitialSystemProcessRVA;
+    if (!xhdr::KernelRead(ptr, &xhdr::g_sysEproc, 8)) {
+        printf("[-] System EPROCESS failed\n"); return false;
+    }
+    printf("[+] System EPROCESS: 0x%llX\n", xhdr::g_sysEproc);
     return true;
 }
 
 bool AttachToFortnite()
 {
-    printf("[+] Looking for Fortnite via Toolhelp...\n");
-
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) {
-        printf("[-] CreateToolhelp32Snapshot failed\n"); return false;
+    printf("[+] Looking for Fortnite...\n");
+    xhdr::ProcessInfo info;
+    // EPROCESS.ImageFileName is 15 bytes (truncated).
+    // Walk process list manually looking for partial match.
+    // The kernel stores "FortniteClient" (truncated from full exe name)
+    
+    // Walk EPROCESS list ourselves with strstr for partial match
+    if (!xhdr::g_sysEproc || !xhdr::g_off.valid) {
+        printf("[-] Driver not initialized\n"); return false;
     }
-
-    uint32_t pid = 0;
-    PROCESSENTRY32W pe = {}; pe.dwSize = sizeof(pe);
-    if (Process32FirstW(snap, &pe)) {
-        do {
-            if (wcsstr(pe.szExeFile, L"FortniteClient") && !wcsstr(pe.szExeFile, L"EAC")) {
-                pid = pe.th32ProcessID;
-                printf("[+] Found PID=%u (%ls)\n", pid, pe.szExeFile);
+    
+    uint64_t curVA = xhdr::g_sysEproc;
+    bool found = false;
+    for (int i = 0; i < 1024; i++) {
+        char imgName[16] = {};
+        DWORD pid = 0;
+        xhdr::KernelRead(curVA + xhdr::g_off.ImageFileName, imgName, sizeof(imgName));
+        xhdr::KernelRead(curVA + xhdr::g_off.UniqueProcessId, &pid, sizeof(pid));
+        
+        // Match "FortniteClient" specifically (not FortniteBootst or FortniteLauncher)
+        if (strstr(imgName, "Client") || strstr(imgName, "client")) {
+            // Skip zombies
+            LONG exitStatus = 0;
+            xhdr::KernelRead(curVA + xhdr::g_off.ExitStatus, &exitStatus, sizeof(exitStatus));
+            if (exitStatus != 0x103) {
+                printf("[!] Skipping PID=%u (exit=0x%X)\n", pid, (unsigned)exitStatus);
+            } else {
+                // Don't break - keep looking. The REAL game process is the last
+                // "FortniteClient" in the list (EAC bootstrapper spawns first).
+                info.pid = pid;
+                info.eprocess = curVA;
+                xhdr::KernelRead(curVA + xhdr::g_off.DirectoryTableBase, &info.cr3, sizeof(info.cr3));
+                xhdr::KernelRead(curVA + xhdr::g_off.Peb, &info.peb, sizeof(info.peb));
+                xhdr::KernelRead(curVA + xhdr::g_off.SectionBaseAddress, &info.sectionBase, sizeof(info.sectionBase));
+                printf("[+] Candidate: '%s' PID=%u Base=0x%llX\n", imgName, pid, (unsigned long long)info.sectionBase);
+                found = true;
+                // Keep going - we want the LAST match (actual game, not EAC)
             }
-        } while (Process32NextW(snap, &pe));
-    }
-    CloseHandle(snap);
-
-    if (!pid) {
-        printf("[-] FortniteClient process not found\n");
-        return false;
-    }
-
-    // EAC blocks Toolhelp module snapshot. Get image base via PEB.
-    HANDLE hProcess = xhdr::GetTargetHandle(pid);
-    if (!hProcess) {
-        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-        if (!hProcess) {
-            printf("[-] Cannot open target process PID=%u\n", pid);
-            return false;
         }
+        
+        uint64_t flink = 0;
+        if (!xhdr::KernelRead(curVA + xhdr::g_off.ActiveProcessLinks, &flink, sizeof(flink)) || !flink) break;
+        if (flink == xhdr::g_sysEproc + xhdr::g_off.ActiveProcessLinks) break;
+        uint64_t nextVA = flink - xhdr::g_off.ActiveProcessLinks;
+        if (nextVA == curVA) break;
+        curVA = nextVA;
     }
-
-    using NtQIP = NTSTATUS(NTAPI*)(HANDLE, DWORD, PVOID, ULONG, PULONG);
-    static auto NtQueryInformationProcess = (NtQIP)GetProcAddress(
-        GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
-
-    struct PBI { NTSTATUS ExitStatus; PVOID PebBaseAddress; ULONG_PTR AffinityMask; LONG BasePriority; HANDLE UniqueProcessId; HANDLE InheritedFromUniqueProcessId; };
-    PBI pbi = {};
-    ULONG retLen = 0;
-    NTSTATUS status = NtQueryInformationProcess(hProcess, 0, &pbi, sizeof(pbi), &retLen);
-
-    if (status < 0 || !pbi.PebBaseAddress) {
-        printf("[-] NtQueryInformationProcess failed status=0x%08lX\n", (unsigned long)status);
+    
+    if (!found) {
+        printf("[-] Fortnite not found in EPROCESS list!\n");
         return false;
     }
+    printf("[+] Selected: PID=%u Base=0x%llX\n", info.pid, (unsigned long long)info.sectionBase);
 
-    printf("[+] PEB=0x%llX\n", (unsigned long long)pbi.PebBaseAddress);
-
-    uint64_t gameBase = 0;
-    if (!xhdr::ProcessRead(pid, (uint64_t)pbi.PebBaseAddress + 0x10, &gameBase, sizeof(gameBase)) || !gameBase) {
-        printf("[-] Failed to read ImageBaseAddress from PEB\n");
-        return false;
-    }
-
-    printf("[+] ImageBase=0x%llX\n", (unsigned long long)gameBase);
-
-    xhdr::ProcessInfo info = {};
-    info.pid = pid;
-    info.sectionBase = gameBase;
     g_driver.SetFromProcessInfo(info);
-    g_targetPID = pid;
-    g_gameBase = gameBase;
-    printf("[+] Attached PID=%u Base=0x%llX\n", pid, (unsigned long long)gameBase);
+    g_targetPID = info.pid;
+    g_gameBase = info.sectionBase;
 
-    uint64_t enc = Read<uint64_t>(gameBase + offsets::core::GWorld);
-    printf("[DBG] UWorld encrypted=0x%llX\n", (unsigned long long)enc);
-
-    // Test xhunter1 cmd 786 as a potential write command (single, safe test)
+    // Test UWorld decryption
+    DebugUWorld();
     uint64_t uworld = GetUWorld();
-    if (uworld) {
-        uint64_t gameInstance = Read<uint64_t>(uworld + offsets::core::GameInstance);
-        uint64_t localPlayers = Read<uint64_t>(gameInstance + offsets::player::LocalPlayers);
-        uint64_t localPlayer  = Read<uint64_t>(localPlayers);
-        uint64_t pc           = Read<uint64_t>(localPlayer + offsets::player::PlayerController);
-        if (pc) {
-            printf("[TEST] Testing cmd 786 for write at PC+0x530...\n");
-            float testRot[3] = { 3.0f, 3.0f, 0.0f };
-
-            // Format 2: inline data in params (handle + dst + size + data)
-            struct { UINT64 h; UINT64 dst; DWORD sz; float data[3]; } wp2 = {};
-            wp2.h   = (UINT64)xhdr::GetTargetHandle(pid);
-            wp2.dst = pc + 0x530;
-            wp2.sz  = sizeof(testRot);
-            memcpy(wp2.data, testRot, sizeof(testRot));
-            xhdr::SendCmd(786, &wp2, sizeof(wp2), true);
-            DWORD sts2 = xhdr::GetThreadRsp().rsp.status;
-            printf("[TEST] Format 2 (inline data): status=0x%08X\n", (unsigned)sts2);
-            float v2[3] = {};
-            xhdr::ProcessRead(pid, pc + 0x530, v2, sizeof(v2));
-            printf("[TEST] Value after format 2: (%.2f, %.2f, %.2f)\n", v2[0], v2[1], v2[2]);
-
-            // Format 3: PID-based (pid + access + dst + src + size)
-            struct { UINT32 pid; UINT32 access; UINT64 dst; UINT64 src; DWORD sz; } wp3 = {};
-            wp3.pid    = pid;
-            wp3.access = 0;
-            wp3.dst    = pc + 0x530;
-            wp3.src    = (UINT64)testRot;
-            wp3.sz     = sizeof(testRot);
-            xhdr::SendCmd(786, &wp3, sizeof(wp3), true);
-            DWORD sts3 = xhdr::GetThreadRsp().rsp.status;
-            printf("[TEST] Format 3 (PID-based): status=0x%08X\n", (unsigned)sts3);
-            float v3[3] = {};
-            xhdr::ProcessRead(pid, pc + 0x530, v3, sizeof(v3));
-            printf("[TEST] Value after format 3: (%.2f, %.2f, %.2f)\n", v3[0], v3[1], v3[2]);
-
-            printf("[TEST] Done\n");
-        }
-    }
+    if (uworld)
+        printf("[+] UWorld: 0x%llX (decrypted OK)\n", uworld);
+    else
+        printf("[-] UWorld decrypt returned NULL\n");
     return true;
-}
-
-// ============================================================
-// Watermark
-// ============================================================
-void RenderWatermark()
-{
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    float alpha = 0.35f + sinf(g_pulsePhase * 0.5f) * 0.1f;
-    ImU32 col = IM_COL32(100, 180, 255, (int)(alpha * 255));
-    char buf[128];
-    sprintf_s(buf, "FESP | %dms | %d players | %s ViGEm",
-        (int)(ImGui::GetIO().Framerate > 0 ? 1000.0f / ImGui::GetIO().Framerate : 0),
-        g_playerCount,
-        g_vigem.IsReady() ? "G" : "!");
-    ImU32 bg = IM_COL32(0, 0, 0, 120);
-    ImVec2 sz = ImGui::CalcTextSize(buf);
-    float pad = 6.0f;
-    dl->AddRectFilled(ImVec2(10 - pad, 10 - pad), ImVec2(10 + sz.x + pad, 10 + sz.y + pad), bg, 4.0f);
-    dl->AddRect(ImVec2(10 - pad, 10 - pad), ImVec2(10 + sz.x + pad, 10 + sz.y + pad), col, 4.0f, 0, 1.0f);
-    dl->AddText(ImVec2(10, 10), col, buf);
-}
-
-// ============================================================
-// Animated pulse helper
-// ============================================================
-ImU32 PulseColor(ImU32 base, float speed, float phaseOff)
-{
-    float t = sinf(g_pulsePhase * speed + phaseOff) * 0.5f + 0.5f;
-    int r = (base >> IM_COL32_R_SHIFT) & 0xFF;
-    int g = (base >> IM_COL32_G_SHIFT) & 0xFF;
-    int b = (base >> IM_COL32_B_SHIFT) & 0xFF;
-    int dim = (int)(255 - t * 80);
-    return IM_COL32(r * dim / 255, g * dim / 255, b * dim / 255, 255);
 }
 
 // ============================================================
@@ -1546,94 +1272,24 @@ ImU32 PulseColor(ImU32 base, float speed, float phaseOff)
 // ============================================================
 void RenderMenu()
 {
-    g_pulsePhase += 0.05f;
-    if (g_pulsePhase > 1000.0f) g_pulsePhase -= 1000.0f;
+    ImGui::SetNextWindowSize(ImVec2(420, 480), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Fortnite ESP v41.20", nullptr, ImGuiWindowFlags_NoCollapse);
 
-    // Smooth menu alpha animation
-    float dt = ImGui::GetIO().DeltaTime;
-    g_menuAlpha += (g_menuTargetAlpha - g_menuAlpha) * dt * 8.0f;
-    if (g_menuAlpha < 0.01f) return;
-    float a = g_menuAlpha;
+    if (g_driverReady) ImGui::TextColored(ImVec4(0,1,0,1), "Driver: OK");
+    else               ImGui::TextColored(ImVec4(1,0,0,1), "Driver: FAIL");
+    ImGui::SameLine();
+    if (g_targetPID) ImGui::TextColored(ImVec4(0,1,0,1), "| PID: %u", g_targetPID);
+    else             ImGui::TextColored(ImVec4(1,1,0,1), "| Not Attached");
+    ImGui::SameLine();
+    ImGui::Text("| %d players | %.0f fps", g_playerCount, ImGui::GetIO().Framerate);
 
-    ImGui::SetNextWindowSize(ImVec2(440, 520), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.93f * a);
-
-    ImGui::Begin("Fortnite ESP v41.20", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-
-    // Animated gradient header
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImVec2 winSz = ImGui::GetWindowSize();
-    float headerH = 48.0f;
-    ImU32 c1 = IM_COL32(40, 80, 160, (int)(220 * a));
-    ImU32 c2 = IM_COL32(80, 40, 160, (int)(220 * a));
-    dl->AddRectFilledMultiColor(p0, ImVec2(p0.x + winSz.x, p0.y + headerH), c1, c2, c2, c1);
-    dl->AddRectFilled(ImVec2(p0.x, p0.y + headerH - 2), ImVec2(p0.x + winSz.x, p0.y + headerH), IM_COL32(0, 0, 0, (int)(40 * a)));
-
-    ImGui::SetCursorPosY(10.0f);
-    ImGui::SetCursorPosX(14.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, a));
-    ImGui::Text("Fortnite ESP");
-    ImGui::SetCursorPosX(14.0f);
-    ImGui::PushFont(nullptr);
-    ImGui::TextDisabled("v41.20");
-    ImGui::PopFont();
-    ImGui::PopStyleColor();
-    ImGui::SetCursorPosY(headerH + 6.0f);
-
-    // Status bar
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
-    {
-        ImU32 dCol = g_driverReady ? PulseColor(IM_COL32(0, 220, 80, 255), 2.0f, 0) : IM_COL32(255, 50, 50, 255);
-        int dr = (dCol >> IM_COL32_R_SHIFT) & 0xFF, dg = (dCol >> IM_COL32_G_SHIFT) & 0xFF, db = (dCol >> IM_COL32_B_SHIFT) & 0xFF;
-        dl->AddCircleFilled(ImVec2(ImGui::GetCursorScreenPos().x + 6, ImGui::GetCursorScreenPos().y + 7), 4, IM_COL32(dr, dg, db, (int)(a * 255)));
-
-        ImGui::Text(" ");
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, a), "Driver");
-        ImGui::SameLine();
-
-        ImU32 vCol = g_vigem.IsReady() ? PulseColor(IM_COL32(0, 200, 255, 255), 2.5f, 1.0f) : IM_COL32(255, 50, 50, 255);
-        int vr = (vCol >> IM_COL32_R_SHIFT) & 0xFF, vg = (vCol >> IM_COL32_G_SHIFT) & 0xFF, vb = (vCol >> IM_COL32_B_SHIFT) & 0xFF;
-        dl->AddCircleFilled(ImVec2(ImGui::GetCursorScreenPos().x + 4, ImGui::GetCursorScreenPos().y + 7), 4, IM_COL32(vr, vg, vb, (int)(a * 255)));
-        ImGui::Text(" ");
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, a), "ViGEm");
-        ImGui::SameLine();
-
-        if (g_targetPID) {
-            char pidTxt[64]; sprintf_s(pidTxt, "PID: %u", g_targetPID);
-            ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.4f, a), "|");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, a), pidTxt);
-            ImGui::SameLine();
-        }
-        ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.4f, a), "|");
-        ImGui::SameLine();
-        char plyTxt[32]; sprintf_s(plyTxt, "%d players", g_playerCount);
-        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, a), plyTxt);
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.4f, 0.7f, 0.4f, a), "|");
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, a), "%.0f fps", ImGui::GetIO().Framerate);
-    }
-    ImGui::PopStyleVar();
-
-    ImGui::Dummy(ImVec2(0, 2));
     if (ImGui::Button("Reattach", ImVec2(-1, 0))) AttachToFortnite();
-    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::Spacing();
 
-    // Proper tab system (content inside BeginTabItem/EndTabItem)
     if (ImGui::BeginTabBar("##tabs")) {
 
         if (ImGui::BeginTabItem("Visuals")) {
             ImGui::Checkbox("Enable ESP", &g_settings.enabled);
-            ImGui::Checkbox("FOV Circle", &g_settings.showFovCircle);
-            if (g_settings.showFovCircle) {
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(80);
-                ImGui::SliderFloat("##fovw", &g_settings.fovCircleThickness, 0.5f, 4.0f, "%.1f");
-            }
             ImGui::Checkbox("Box", &g_settings.showBox);
             if (g_settings.showBox) {
                 ImGui::SameLine();
@@ -1655,18 +1311,18 @@ void RenderMenu()
             if (ImGui::Combo("Color Mode", &cm, "Static\0Distance\0Team\0"))
                 g_settings.colorMode = (ColorMode)cm;
 
-            ImGui::Dummy(ImVec2(0, 4));
-            if (g_settings.colorMode == ColorMode::STATIC)
+            if (g_settings.colorMode == ColorMode::STATIC) {
                 ImGui::ColorEdit4("Box Color", g_settings.boxColor, ImGuiColorEditFlags_NoInputs);
+            }
             if (g_settings.colorMode == ColorMode::DISTANCE_BASED) {
                 ImGui::SliderFloat("Close (Red)", &g_settings.distClose, 10.f, 100.f);
                 ImGui::SliderFloat("Mid (Yellow)", &g_settings.distMid, 50.f, 200.f);
                 ImGui::SliderFloat("Far (Green)", &g_settings.distFar, 100.f, 500.f);
             }
-            if (g_settings.colorMode == ColorMode::TEAM_BASED)
+            if (g_settings.colorMode == ColorMode::TEAM_BASED) {
                 ImGui::ColorEdit4("Team Color", g_settings.teamColor, ImGuiColorEditFlags_NoInputs);
-
-            ImGui::Dummy(ImVec2(0, 4));
+            }
+            ImGui::Separator();
             ImGui::ColorEdit4("Health Bar", g_settings.healthColor, ImGuiColorEditFlags_NoInputs);
             ImGui::ColorEdit4("Shield Bar", g_settings.shieldColor, ImGuiColorEditFlags_NoInputs);
             ImGui::EndTabItem();
@@ -1674,80 +1330,73 @@ void RenderMenu()
 
         if (ImGui::BeginTabItem("Info")) {
             ImGui::Checkbox("Player Names", &g_settings.showPlayerName);
-            ImGui::Checkbox("Health/Shield Bars", &g_settings.showHealthBar);
+            ImGui::Checkbox("Health / Shield Bars", &g_settings.showHealthBar);
             ImGui::Checkbox("Weapon Info", &g_settings.showWeaponInfo);
             ImGui::Checkbox("Status Indicators", &g_settings.showStatusIndicators);
             ImGui::Checkbox("Kill Count", &g_settings.showKillCount);
-            ImGui::Dummy(ImVec2(0, 4));
-            ImGui::SliderInt("Max Distance (m)", &g_settings.maxDistance, 50, 1000);
+            ImGui::Separator();
+            ImGui::SliderInt("Max Distance (m)", &g_settings.maxDistance, 50, 500);
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Skeleton")) {
             ImGui::Checkbox("Show Local Skeleton", &g_settings.showLocalSkeleton);
-            ImGui::Dummy(ImVec2(0, 4));
+            ImGui::Separator();
             ImGui::Checkbox("Gradient Color", &g_settings.skeletonGradient);
             ImGui::Checkbox("Glow Effect", &g_settings.skeletonGlow);
             ImGui::SliderFloat("Line Width", &g_settings.skeletonLineWidth, 0.5f, 4.0f);
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Debug")) {
-            ImGui::Checkbox("Capture pointer chain", &g_settings.showDebug);
-            ImGui::Dummy(ImVec2(0, 4));
-            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, a), "Enable then join a match.");
-            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, a), "Copy-paste the output below:");
-            ImGui::Dummy(ImVec2(0, 4));
-            ImGui::InputTextMultiline("##debug", g_debugPtr, sizeof(g_debugPtr),
-                ImVec2(-1, ImGui::GetContentRegionAvail().y - 8),
-                ImGuiInputTextFlags_ReadOnly);
-            ImGui::EndTabItem();
-        }
-
         if (ImGui::BeginTabItem("Aimbot")) {
             ImGui::Checkbox("Enable Aimbot", &g_aim.enabled);
             ImGui::SameLine();
-            if (g_aim.masterEnabled)
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.4f, a), "  [ACTIVE]");
-            else
-                ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, a), "  [TOGGLED OFF]");
-            ImGui::Dummy(ImVec2(0, 2));
-
-            ImGui::SliderFloat("Smooth Speed", &g_aim.smooth, 0.01f, 0.50f, "%.3f");
-            ImGui::SliderFloat("FOV (degrees)", &g_aim.fov, 1.0f, 30.0f, "%.1f");
-            ImGui::SliderFloat("Random Skip", &g_aim.randomSkip, 0.0f, 0.80f, "%.2f");
-            ImGui::SliderFloat("Jitter", &g_aim.randomOffset, 0.0f, 10.0f, "%.1f");
-
-            ImGui::Dummy(ImVec2(0, 4));
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, a), "ViGEm Controller");
-            if (g_vigem.IsReady()) {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0, 1, 0.4f, a), "  [OK]");
+            ImGui::TextColored(ImVec4(1,1,0,1), g_aim.masterEnabled ? "[P=ON]" : "[P=OFF]");
+            ImGui::Separator();
+            ImGui::SliderFloat("Smoothness", &g_aim.smooth, 0.01f, 0.50f, "%.2f");
+            ImGui::SliderFloat("FOV (degrees)", &g_aim.fov, 1.0f, 90.0f, "%.0f");
+            ImGui::SliderFloat("Stick Sensitivity", &g_aim.stickSensitivity, 0.1f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Stick Deadzone", &g_aim.stickDeadzone, 0.0f, 0.20f, "%.2f");
+            ImGui::SliderFloat("Random Skip", &g_aim.randomSkip, 0.0f, 0.9f, "%.2f");
+            const char* aimKeys = "Right Mouse\0Left Mouse\0Middle Mouse\0Side Button 1\0Side Button 2\0Shift\0Ctrl\0Alt\0Space\0Tab\0Caps Lock\0";
+            int aimKeyIdx = 0;
+            switch (g_aim.aimKey) {
+                case VK_RBUTTON: aimKeyIdx = 0; break;
+                case VK_LBUTTON: aimKeyIdx = 1; break;
+                case VK_MBUTTON: aimKeyIdx = 2; break;
+                case VK_XBUTTON1: aimKeyIdx = 3; break;
+                case VK_XBUTTON2: aimKeyIdx = 4; break;
+                case VK_SHIFT: aimKeyIdx = 5; break;
+                case VK_CONTROL: aimKeyIdx = 6; break;
+                case VK_MENU: aimKeyIdx = 7; break;
+                case VK_SPACE: aimKeyIdx = 8; break;
+                case VK_TAB: aimKeyIdx = 9; break;
+                case VK_CAPITAL: aimKeyIdx = 10; break;
             }
-            ImGui::SliderFloat("Stick Sens.", &g_aim.stickSensitivity, 0.05f, 1.0f, "%.2f");
-            ImGui::SliderFloat("Deadzone", &g_aim.stickDeadzone, 0.0f, 0.20f, "%.2f");
-
-            ImGui::Dummy(ImVec2(0, 2));
-            ImGui::Checkbox("Aim at teammates", &g_aim.aimAtTeam);
-            ImGui::Dummy(ImVec2(0, 2));
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.6f, a * 0.8f), "RMB = hold aim  |  P = toggle on/off");
+            if (ImGui::Combo("Aim Key", &aimKeyIdx, aimKeys)) {
+                switch (aimKeyIdx) {
+                    case 0: g_aim.aimKey = VK_RBUTTON; break;
+                    case 1: g_aim.aimKey = VK_LBUTTON; break;
+                    case 2: g_aim.aimKey = VK_MBUTTON; break;
+                    case 3: g_aim.aimKey = VK_XBUTTON1; break;
+                    case 4: g_aim.aimKey = VK_XBUTTON2; break;
+                    case 5: g_aim.aimKey = VK_SHIFT; break;
+                    case 6: g_aim.aimKey = VK_CONTROL; break;
+                    case 7: g_aim.aimKey = VK_MENU; break;
+                    case 8: g_aim.aimKey = VK_SPACE; break;
+                    case 9: g_aim.aimKey = VK_TAB; break;
+                    case 10: g_aim.aimKey = VK_CAPITAL; break;
+                }
+            }
+            ImGui::Checkbox("Auto Fire", &g_aim.autoFire);
+            ImGui::Checkbox("Aim at Teammates", &g_aim.aimAtTeam);
+            if (g_vigem.IsReady()) ImGui::TextColored(ImVec4(0,1,0,1), "ViGEm: Connected");
+            else ImGui::TextColored(ImVec4(1,0,0,1), "ViGEm: Not Connected");
             ImGui::EndTabItem();
         }
 
         ImGui::EndTabBar();
     }
-
-    // Bottom bar with exit button
-    ImU32 botCol = IM_COL32(20, 20, 30, (int)(180 * a));
-    dl->AddRectFilled(ImVec2(p0.x, ImGui::GetCursorScreenPos().y), ImVec2(p0.x + winSz.x, ImGui::GetCursorScreenPos().y + 30), botCol);
-    dl->AddLine(ImVec2(p0.x, ImGui::GetCursorScreenPos().y), ImVec2(p0.x + winSz.x, ImGui::GetCursorScreenPos().y), IM_COL32(255, 255, 255, (int)(15 * a)));
-
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);
-    if (ImGui::Button("Exit Cheat", ImVec2(120, 24))) {
-        PostQuitMessage(0);
-    }
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.5f, a * 0.6f), "closes process completely");
 
     ImGui::End();
 }
@@ -1758,29 +1407,32 @@ void RenderMenu()
 int main()
 {
     AllocConsole();
-    ShowWindow(GetConsoleWindow(), SW_HIDE);
     FILE* f;
     freopen_s(&f, "CONOUT$", "w", stdout);
     freopen_s(&f, "CONOUT$", "w", stderr);
+
+    printf("========================================\n");
+    printf("  Fortnite ESP Box - v41.20\n");
+    printf("========================================\n\n");
+
     g_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     g_screenHeight = GetSystemMetrics(SM_CYSCREEN);
-
-    srand((unsigned int)GetTickCount64());
+    printf("[+] Screen: %dx%d\n", g_screenWidth, g_screenHeight);
 
     g_driverReady = InitializeDriver();
     if (!g_driverReady) {
-        Sleep(3000);
+        printf("\n[-] Driver failed. Press Enter...\n");
+        std::cin.get();
         return 1;
-    }
-
-    if (g_vigem.Init()) {
-        printf("[+] ViGEm ready - aimbot uses virtual Xbox 360 controller\n");
-    } else {
-        printf("[-] ViGEm init failed - aimbot via controller disabled\n");
     }
 
     if (!AttachToFortnite())
         printf("[!] Fortnite not running. Use Reattach button later.\n");
+
+    if (g_vigem.Init())
+        printf("[+] ViGEm ready - aimbot uses virtual Xbox 360 controller\n");
+    else
+        printf("[-] ViGEm init failed - aimbot via controller disabled\n");
 
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L,
         GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr,
@@ -1803,7 +1455,8 @@ int main()
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr; // don't persist window layout / always use defaults
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 6.0f;
@@ -1840,7 +1493,6 @@ int main()
     QueryPerformanceFrequency(&perfFreq);
     static LARGE_INTEGER lastFrame;
     QueryPerformanceCounter(&lastFrame);
-
     while (!done)
     {
         MSG msg;
@@ -1851,15 +1503,7 @@ int main()
         }
         if (done) break;
 
-        if (GetAsyncKeyState(VK_INSERT) & 1) {
-            showMenu = !showMenu;
-            g_menuTargetAlpha = showMenu ? 1.0f : 0.0f;
-            LONG style = GetWindowLong(hwnd, GWL_EXSTYLE);
-            if (showMenu) SetWindowLong(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
-            else          SetWindowLong(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
-        }
-
-        // Frame limiter: sleep if we're ahead of 60fps
+        // Frame limiter: cap overlay at ~60fps for smooth pacing and lower CPU use
         LARGE_INTEGER now;
         QueryPerformanceCounter(&now);
         double elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
@@ -1869,19 +1513,25 @@ int main()
         }
         QueryPerformanceCounter(&lastFrame);
 
+        if (GetAsyncKeyState(VK_INSERT) & 1) {
+            showMenu = !showMenu;
+            LONG style = GetWindowLong(hwnd, GWL_EXSTYLE);
+            if (showMenu) SetWindowLong(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+            else          SetWindowLong(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
+        }
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
         g_renderFrameIdx = g_readIdx.load();
-        RenderWatermark();
         if (showMenu) RenderMenu();
         RenderESP();
         RunAimbot();
 
         ImGui::Render();
-        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         const float cc[4] = { 0, 0, 0, 0 };
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         g_pSwapChain->Present(0, 0);
@@ -1896,10 +1546,8 @@ int main()
     CleanupDeviceD3D();
     DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
-    g_vigem.Shutdown();
     if (xhdr::g_dev != INVALID_HANDLE_VALUE) CloseHandle(xhdr::g_dev);
     if (xhdr::g_targetH) CloseHandle(xhdr::g_targetH);
-    if (g_gameHandle) CloseHandle(g_gameHandle);
     return 0;
 }
 

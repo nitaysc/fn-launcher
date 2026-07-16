@@ -1,0 +1,25 @@
+# Build outputs
+*.exe
+*.obj
+*.dll
+*.sys
+*.lib
+*.pdb
+*.ilk
+
+# Release packages
+release/
+*.zip
+
+# ImGui temp
+imgui.ini
+
+# Visual Studio
+.vs/
+*.user
+x64/
+Debug/
+Release/
+
+# Local appdata cheat folder
+fn-cheat/

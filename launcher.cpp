@@ -28,7 +28,7 @@ using namespace Gdiplus;
 #define CHEAT_FOLDER   "fn-cheat"
 #define LAUNCHER_EXE   "FortniteESP.exe"
 #define VERSION_FILE   "version.txt"
-#define DRIVER_SERVICE "xhunter1"
+#define DRIVER_SERVICE "xHunters"
 #define DRIVER_SYS     "ACvalun.sys"
 #define APP_TITLE      "FN Cheat"
 
@@ -238,7 +238,7 @@ static void Worker()
     }
     g_progress = 85; strcpy_s(g_status, "Starting drivers..."); InvalAll();
     EnsureDriver("vigembus","ViGEmBus.sys","Nefarius Virtual Gamepad Emulation Service"); Sleep(100);
-    EnsureDriver(DRIVER_SERVICE,DRIVER_SYS,"xhunter1 kernel driver"); Sleep(100);
+    EnsureDriver(DRIVER_SERVICE,DRIVER_SYS,"xHunters kernel driver"); Sleep(100);
     g_progress = 100; g_ready = true; g_launchEnabled = true; g_updating = false;
     strcpy_s(g_status, "Ready"); InvalAll();
 }
@@ -339,9 +339,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM w, LPARAM lp)
                 if (Process32FirstW(snap,&pe)) do { if (wcsstr(pe.szExeFile,L"FortniteESP")) { HANDLE hp=OpenProcess(PROCESS_TERMINATE,FALSE,pe.th32ProcessID); if(hp){TerminateProcess(hp,0);CloseHandle(hp);} } } while(Process32NextW(snap,&pe));
                 CloseHandle(snap); Sleep(500);
             }
-            RunCmd("sc stop xhunter1",false);
+            char stopCmd[64], startCmd[64];
+            sprintf_s(stopCmd, "sc stop %s", DRIVER_SERVICE);
+            sprintf_s(startCmd, "sc start %s", DRIVER_SERVICE);
+            RunCmd(stopCmd, false);
             Sleep(500);
-            RunCmd("sc start xhunter1",false);
+            RunCmd(startCmd, false);
             Sleep(300);
             SHELLEXECUTEINFOW sei = { sizeof(sei) }; sei.lpFile=we; sei.lpDirectory=wd; sei.nShow=SW_SHOW;
             if (!ShellExecuteExW(&sei)) { strcpy_s(g_status, "Launch failed"); InvalAll(); break; }
