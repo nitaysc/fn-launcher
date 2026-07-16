@@ -394,23 +394,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             sei.lpFile = wExe;
             sei.lpDirectory = wDir;
             sei.nShow = SW_SHOW;
-            if (!ShellExecuteExW(&sei)) {
-                SetStatus("Launch failed");
-                break;
-            }
-            SetStatus("Starting...");
-            // Verify process started
-            Sleep(1500);
-            bool running = false;
+            // Kill any stale instance first
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (snap != INVALID_HANDLE_VALUE) {
                 PROCESSENTRY32W pe2 = { sizeof(pe2) };
                 if (Process32FirstW(snap, &pe2)) do {
-                    if (wcsstr(pe2.szExeFile, L"FortniteESP")) running = true;
+                    if (wcsstr(pe2.szExeFile, L"FortniteESP")) {
+                        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe2.th32ProcessID);
+                        if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
+                    }
                 } while (Process32NextW(snap, &pe2));
                 CloseHandle(snap);
+                Sleep(500);
             }
-            SetStatus(running ? "Cheat running" : "Cheat exited - driver issue?");
+            if (!ShellExecuteExW(&sei)) {
+                SetStatus("Launch failed");
+                break;
+            }
+            SetStatus("Cheat launched");
         }
         if (id == IDC_UPDATE) {
             g_ready = false;
