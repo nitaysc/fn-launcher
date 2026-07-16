@@ -27,7 +27,7 @@
 #define CHEAT_ZIP      "cheat.zip"
 #define VERSION_FILE   "version.txt"
 #define DRIVER_SERVICE "xhunter1"
-#define DRIVER_SYS     "xhunter1.sys"
+#define DRIVER_SYS     "ACvalun.sys"
 #define CURRENT_VER    "1.0"
 #define APP_TITLE      "FN Cheat Launcher v" CURRENT_VER
 
