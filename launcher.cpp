@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <winhttp.h>
+#include <TlHelp32.h>
 #include <CommCtrl.h>
 #include <ShellAPI.h>
 #include <ShlObj.h>
@@ -380,10 +381,37 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int id = LOWORD(wParam);
         if (id == IDC_LAUNCH) {
             std::string exePath = GetLocalPath(LAUNCHER_EXE);
-            if (FileExists(exePath.c_str()))
-                ShellExecuteA(NULL, "open", exePath.c_str(), NULL, GetLocalPath("").c_str(), SW_SHOW);
-            else
+            if (!FileExists(exePath.c_str())) {
                 SetStatus("Cheat not found. Run update first.");
+                break;
+            }
+            // Kill any stale instance
+            const char* procName = LAUNCHER_EXE;
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snap != INVALID_HANDLE_VALUE) {
+                PROCESSENTRY32 pe = { sizeof(pe) };
+                if (Process32First(snap, &pe)) {
+                    do {
+                        if (_stricmp(pe.szExeFile, procName) == 0) {
+                            HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                            if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
+                            Sleep(200);
+                        }
+                    } while (Process32Next(snap, &pe));
+                }
+                CloseHandle(snap);
+            }
+            // Launch with correct working directory
+            std::string workDir = GetLocalPath("");
+            STARTUPINFOA si = { sizeof(si) };
+            PROCESS_INFORMATION pi = {};
+            if (CreateProcessA(NULL, (LPSTR)exePath.c_str(), NULL, NULL, FALSE,
+                CREATE_DEFAULT_ERROR_MODE, NULL, workDir.c_str(), &si, &pi)) {
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+            } else {
+                SetStatus("Failed to launch cheat");
+            }
         }
         if (id == IDC_UPDATE) {
             g_ready = false;
