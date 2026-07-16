@@ -385,7 +385,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 SetStatus("Cheat not found. Run update first.");
                 break;
             }
-            // Launch - keep it simple
             WCHAR wExe[MAX_PATH], wDir[MAX_PATH];
             MultiByteToWideChar(CP_UTF8, 0, exePath.c_str(), -1, wExe, MAX_PATH);
             wcscpy_s(wDir, wExe);
@@ -395,8 +394,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             sei.lpFile = wExe;
             sei.lpDirectory = wDir;
             sei.nShow = SW_SHOW;
-            ShellExecuteExW(&sei);
-            SetStatus("Cheat launched");
+            if (!ShellExecuteExW(&sei)) {
+                SetStatus("Launch failed");
+                break;
+            }
+            SetStatus("Starting...");
+            // Verify process started
+            Sleep(1500);
+            bool running = false;
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snap != INVALID_HANDLE_VALUE) {
+                PROCESSENTRY32W pe2 = { sizeof(pe2) };
+                if (Process32FirstW(snap, &pe2)) do {
+                    if (wcsstr(pe2.szExeFile, L"FortniteESP")) running = true;
+                } while (Process32NextW(snap, &pe2));
+                CloseHandle(snap);
+            }
+            SetStatus(running ? "Cheat running" : "Cheat exited - driver issue?");
         }
         if (id == IDC_UPDATE) {
             g_ready = false;
