@@ -1,5 +1,4 @@
 // Launcher.cpp - FN Cheat Launcher v1.0
-// Win32 GUI: auto-downloads cheat, installs driver, launches overlay
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <winhttp.h>
@@ -11,15 +10,12 @@
 #include <string>
 #include <thread>
 
+
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "shlwapi.lib")
-// Admin requirement via embedded manifest (launcher.exe.manifest)
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 
-// ============================================================
-// Config - change these for your GitHub repo
-// ============================================================
 #define GITHUB_USER    "nitaysc"
 #define GITHUB_REPO    "fn-launcher"
 #define CHEAT_FOLDER   "fn-cheat"
@@ -29,21 +25,16 @@
 #define DRIVER_SERVICE "xhunter1"
 #define DRIVER_SYS     "ACvalun.sys"
 #define CURRENT_VER    "1.0"
-#define APP_TITLE      "FN Cheat Launcher v" CURRENT_VER
+#define APP_TITLE      L"FN Cheat"
 
-// ============================================================
-// Window controls
-// ============================================================
 #define IDC_STATUS     1001
 #define IDC_PROGRESS   1002
 #define IDC_VERSION    1003
 #define IDC_LAUNCH     1004
 #define IDC_UPDATE     1005
 #define IDC_WEBLINK    1006
+#define IDC_LOGO       1007
 
-// ============================================================
-// Globals
-// ============================================================
 HWND g_hWnd = NULL;
 HWND g_hStatus = NULL;
 HWND g_hProgress = NULL;
@@ -51,6 +42,11 @@ HWND g_hVersion = NULL;
 HWND g_hLaunch = NULL;
 HWND g_hUpdate = NULL;
 HWND g_hWebLink = NULL;
+HFONT g_hTitleFont = NULL;
+HFONT g_hNormFont = NULL;
+HFONT g_hBtnFont = NULL;
+HBRUSH g_bgBrush = NULL;
+HBRUSH g_whiteBrush = NULL;
 
 char g_localVer[32] = "0";
 char g_latestVer[32] = "0";
@@ -59,17 +55,21 @@ bool g_ready = false;
 bool g_updateAvail = false;
 bool g_isAdmin = false;
 
-// ============================================================
-// Helpers
-// ============================================================
+// Colors
+const COLORREF CLR_BG      = RGB(18, 18, 22);
+const COLORREF CLR_ACCENT  = RGB(0, 120, 215);
+const COLORREF CLR_TEXT    = RGB(220, 220, 225);
+const COLORREF CLR_SUBTEXT = RGB(140, 140, 150);
+const COLORREF CLR_GREEN   = RGB(60, 200, 80);
+
 bool IsAdmin()
 {
     BOOL isElevated = FALSE;
     HANDLE hToken = NULL;
     if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
         TOKEN_ELEVATION te = {};
-        DWORD sz = sizeof(te);
-        if (GetTokenInformation(hToken, TokenElevation, &te, sz, &sz))
+        DWORD sz = sizeof(te), ret = 0;
+        if (GetTokenInformation(hToken, TokenElevation, &te, sz, &ret))
             isElevated = te.TokenIsElevated;
         CloseHandle(hToken);
     }
@@ -114,21 +114,18 @@ std::string GetLocalPath(const char* sub = "")
     return std::string(path);
 }
 
-// Fetch URL content into string using WinHTTP
 std::string HttpGet(const char* url)
 {
     std::string result;
     HINTERNET hSession = WinHttpOpen(L"Launcher/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         NULL, NULL, 0);
     if (!hSession) return result;
-
     HINTERNET hConnect = WinHttpConnect(hSession,
         L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (hConnect) {
         HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET",
             L"/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest",
-            NULL, NULL, NULL,
-            WINHTTP_FLAG_SECURE);
+            NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
         if (hRequest) {
             WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0);
             WinHttpReceiveResponse(hRequest, NULL);
@@ -146,7 +143,6 @@ std::string HttpGet(const char* url)
     return result;
 }
 
-// Simple JSON field extraction
 std::string ExtractJsonStr(const std::string& json, const char* field)
 {
     char search[128];
@@ -159,68 +155,46 @@ std::string ExtractJsonStr(const std::string& json, const char* field)
     return json.substr(pos, end - pos);
 }
 
-// Unzip using Shell COM (native Windows, no deps)
 bool UnzipTo(const char* zipPath, const char* destPath)
 {
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     bool ok = false;
-
     wchar_t wzp[MAX_PATH], wdp[MAX_PATH];
     MultiByteToWideChar(CP_UTF8, 0, zipPath, -1, wzp, MAX_PATH);
     MultiByteToWideChar(CP_UTF8, 0, destPath, -1, wdp, MAX_PATH);
-
-    // Ensure destination exists
     SHCreateDirectoryExW(NULL, wdp, NULL);
-
-    // Use Shell COM to unzip
     IShellDispatch* pShell = NULL;
     HRESULT hr = CoCreateInstance(CLSID_Shell, NULL, CLSCTX_INPROC_SERVER,
         IID_IShellDispatch, (void**)&pShell);
     if (SUCCEEDED(hr) && pShell) {
-        VARIANT vDir;
-        VariantInit(&vDir);
-        vDir.vt = VT_BSTR;
-        vDir.bstrVal = SysAllocString(wzp);
+        VARIANT vDir; VariantInit(&vDir); vDir.vt = VT_BSTR; vDir.bstrVal = SysAllocString(wzp);
         Folder* pFolder = NULL;
         hr = pShell->NameSpace(vDir, &pFolder);
         if (SUCCEEDED(hr) && pFolder) {
             FolderItems* pItems = NULL;
             pFolder->Items(&pItems);
             if (pItems) {
-                VARIANT vDest;
-                VariantInit(&vDest);
-                vDest.vt = VT_BSTR;
-                vDest.bstrVal = SysAllocString(wdp);
+                VARIANT vDest; VariantInit(&vDest); vDest.vt = VT_BSTR; vDest.bstrVal = SysAllocString(wdp);
                 Folder* pDest = NULL;
                 pShell->NameSpace(vDest, &pDest);
                 if (pDest) {
                     VARIANT vSrc, vOpt;
-                    VariantInit(&vSrc);
-                    vSrc.vt = VT_DISPATCH;
-                    vSrc.pdispVal = pItems;
-                    VariantInit(&vOpt);
-                    vOpt.vt = VT_I4;
-                    vOpt.lVal = 0x14; // no UI + yes to all
+                    VariantInit(&vSrc); vSrc.vt = VT_DISPATCH; vSrc.pdispVal = pItems;
+                    VariantInit(&vOpt); vOpt.vt = VT_I4; vOpt.lVal = 0x14;
                     pDest->CopyHere(vSrc, vOpt);
                     ok = true;
                     pDest->Release();
                 }
-                VariantClear(&vDest);
-                pItems->Release();
+                VariantClear(&vDest); pItems->Release();
             }
             pFolder->Release();
         }
-        VariantClear(&vDir);
-        pShell->Release();
+        VariantClear(&vDir); pShell->Release();
     }
-
     CoUninitialize();
     return ok;
 }
 
-// ============================================================
-// UI Update helpers (called from worker thread)
-// ============================================================
 void SetStatus(const char* text)
 {
     if (g_hStatus) SendMessageA(g_hStatus, WM_SETTEXT, 0, (LPARAM)text);
@@ -234,7 +208,10 @@ void SetProgress(int pct)
 void SetVersionText(const char* local, const char* latest)
 {
     char buf[256];
-    sprintf_s(buf, "Local: %s  |  Latest: %s", local, latest);
+    if (local[0] && local[0] != '0')
+        sprintf_s(buf, "v%s installed  \x95  v%s latest", local, latest);
+    else
+        sprintf_s(buf, "Latest: v%s", latest);
     if (g_hVersion) SendMessageA(g_hVersion, WM_SETTEXT, 0, (LPARAM)buf);
 }
 
@@ -248,9 +225,6 @@ void ShowUpdateBtn(bool show)
     if (g_hUpdate) ShowWindow(g_hUpdate, show ? SW_SHOW : SW_HIDE);
 }
 
-// ============================================================
-// Driver management
-// ============================================================
 bool InstallDriver()
 {
     std::string sysPath = GetLocalPath(DRIVER_SYS);
@@ -258,44 +232,29 @@ bool InstallDriver()
         SetStatus("Driver file not found");
         return false;
     }
-
-    // Check if service exists
     char buf[512];
     sprintf_s(buf, "sc query " DRIVER_SERVICE);
     if (RunCmd(buf)) {
-        // Service exists, just try to start
         sprintf_s(buf, "sc start " DRIVER_SERVICE);
         RunCmd(buf, false);
         return true;
     }
-
-    // Create service
-    sprintf_s(buf, "sc create " DRIVER_SERVICE " binPath= \"%s\" type= kernel",
-        sysPath.c_str());
+    sprintf_s(buf, "sc create " DRIVER_SERVICE " binPath= \"%s\" type= kernel", sysPath.c_str());
     if (!RunCmd(buf)) {
         SetStatus("Failed to create driver service");
         return false;
     }
-
-    // Start service
     sprintf_s(buf, "sc start " DRIVER_SERVICE);
     RunCmd(buf, false);
     return true;
 }
 
-// ============================================================
-// Worker thread
-// ============================================================
 void WorkerThread()
 {
     SetStatus("Initializing...");
     std::string localDir = GetLocalPath("");
     std::string verPath = GetLocalPath(VERSION_FILE);
-
-    // Create directory
     SHCreateDirectoryExA(NULL, localDir.c_str(), NULL);
-
-    // Read local version
     FILE* f = NULL;
     if (fopen_s(&f, verPath.c_str(), "r") == 0 && f) {
         if (fgets(g_localVer, sizeof(g_localVer), f)) {
@@ -304,11 +263,8 @@ void WorkerThread()
         }
         fclose(f);
     }
-
     SetStatus("Checking for updates...");
     Sleep(200);
-
-    // Check GitHub for latest version
     std::string json = HttpGet("https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest");
     if (!json.empty()) {
         std::string tag = ExtractJsonStr(json, "tag_name");
@@ -316,15 +272,12 @@ void WorkerThread()
         strncpy_s(g_latestVer, tag.c_str(), sizeof(g_latestVer) - 1);
         strncpy_s(g_downloadUrl, url.c_str(), sizeof(g_downloadUrl) - 1);
     }
-
     SetVersionText(g_localVer, g_latestVer[0] ? g_latestVer : g_localVer);
     g_updateAvail = (strcmp(g_localVer, g_latestVer) != 0);
     bool needDownload = (!FileExists(GetLocalPath(LAUNCHER_EXE).c_str()) || g_updateAvail);
-
     if (needDownload && g_downloadUrl[0]) {
         SetStatus("Downloading cheat files...");
         SetProgress(10);
-
         std::string zipPath = localDir + "\\update.zip";
         HRESULT hr = URLDownloadToFileA(NULL, g_downloadUrl, zipPath.c_str(), 0, NULL);
         if (SUCCEEDED(hr)) {
@@ -333,7 +286,6 @@ void WorkerThread()
             if (UnzipTo(zipPath.c_str(), localDir.c_str())) {
                 SetProgress(80);
                 Sleep(200);
-                // Write version file
                 if (fopen_s(&f, verPath.c_str(), "w") == 0 && f) {
                     fprintf(f, "%s", g_latestVer);
                     fclose(f);
@@ -350,12 +302,9 @@ void WorkerThread()
             return;
         }
     }
-
-    // Install driver
     SetStatus("Starting driver...");
     InstallDriver();
     Sleep(300);
-
     SetProgress(100);
     g_ready = true;
     SetStatus("Ready! Click Launch to start.");
@@ -363,29 +312,78 @@ void WorkerThread()
     ShowUpdateBtn(g_updateAvail);
 }
 
-// ============================================================
-// Window Procedure
-// ============================================================
+// Custom draw the logo banner at the top
+void DrawBanner(HWND hWnd, HDC hdc, RECT rc)
+{
+    // Top accent bar
+    RECT bar = rc;
+    bar.bottom = bar.top + 2;
+    HBRUSH accent = CreateSolidBrush(CLR_ACCENT);
+    FillRect(hdc, &bar, accent);
+    DeleteObject(accent);
+
+    // Title text
+    SetBkMode(hdc, TRANSPARENT);
+    HFONT old = (HFONT)SelectObject(hdc, g_hTitleFont);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    RECT tr = { 30, 20, rc.right - 30, 65 };
+    DrawTextW(hdc, L"FN Cheat Launcher", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, old);
+
+    // Subtitle
+    old = (HFONT)SelectObject(hdc, g_hNormFont);
+    SetTextColor(hdc, CLR_SUBTEXT);
+    tr.top = 52; tr.bottom = 75;
+    DrawTextW(hdc, L"Fortnite ESP + Aimbot  \xb7  ViGEm Controller", -1, &tr,
+        DT_LEFT | DT_TOP | DT_SINGLELINE);
+    SelectObject(hdc, old);
+}
+
+void DrawMainArea(HDC hdc, RECT rc)
+{
+    RECT area = { 20, 85, rc.right - 20, rc.bottom - 10 };
+    HBRUSH bg = CreateSolidBrush(RGB(25, 25, 32));
+    FillRect(hdc, &area, bg);
+    DeleteObject(bg);
+
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(40, 40, 50));
+    HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Rectangle(hdc, area.left, area.top, area.right, area.bottom);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(pen);
+}
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, CLR_TEXT);
+        return (LRESULT)g_whiteBrush;
+    }
+    case WM_CTLCOLORBTN: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        return (LRESULT)g_whiteBrush;
+    }
     case WM_COMMAND: {
         int id = LOWORD(wParam);
         if (id == IDC_LAUNCH) {
-            // Launch the cheat
             std::string exePath = GetLocalPath(LAUNCHER_EXE);
-            if (FileExists(exePath.c_str())) {
-                ShellExecuteA(NULL, "open", exePath.c_str(), NULL,
-                    GetLocalPath("").c_str(), SW_SHOW);
-            } else {
+            if (FileExists(exePath.c_str()))
+                ShellExecuteA(NULL, "open", exePath.c_str(), NULL, GetLocalPath("").c_str(), SW_SHOW);
+            else
                 SetStatus("Cheat not found. Run update first.");
-            }
         }
         if (id == IDC_UPDATE) {
             g_ready = false;
             EnableLaunch(false);
             ShowUpdateBtn(false);
             SetProgress(0);
+            SetStatus("Updating...");
             std::thread(WorkerThread).detach();
         }
         if (id == IDC_WEBLINK) {
@@ -395,6 +393,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+
+        // Background
+        FillRect(hdc, &rc, g_bgBrush);
+
+        // Draw banner
+        DrawBanner(hWnd, hdc, rc);
+
+        // Draw main area border
+        DrawMainArea(hdc, rc);
+
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
@@ -404,12 +422,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
-// ============================================================
-// WinMain
-// ============================================================
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow)
 {
-    // Check admin
     if (!IsAdmin()) {
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -418,82 +432,99 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow)
     }
     g_isAdmin = true;
 
-    // Init common controls
     INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_PROGRESS_CLASS };
     InitCommonControlsEx(&icex);
 
-    // Register window class
-    WNDCLASSEXA wc = { sizeof(wc) };
+    // Create fonts
+    LOGFONTW lf = {};
+    lf.lfHeight = -22;
+    lf.lfWeight = FW_BOLD;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+    g_hTitleFont = CreateFontIndirectW(&lf);
+
+    lf.lfHeight = -12;
+    lf.lfWeight = FW_NORMAL;
+    g_hNormFont = CreateFontIndirectW(&lf);
+
+    lf.lfHeight = -13;
+    lf.lfWeight = FW_SEMIBOLD;
+    g_hBtnFont = CreateFontIndirectW(&lf);
+
+    g_bgBrush = CreateSolidBrush(CLR_BG);
+    g_whiteBrush = CreateSolidBrush(RGB(25, 25, 32));
+
+    WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = "FNLauncher";
-    RegisterClassExA(&wc);
+    wc.hbrBackground = NULL;
+    wc.lpszClassName = L"FNLauncher";
+    RegisterClassExW(&wc);
 
-    // Create window
-    g_hWnd = CreateWindowExA(0, "FNLauncher", APP_TITLE,
+    int winW = 480, winH = 290;
+    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    g_hWnd = CreateWindowExW(0, L"FNLauncher", APP_TITLE,
         WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-        100, 100, 460, 240,
+        (sw - winW) / 2, (sh - winH) / 2, winW, winH,
         NULL, NULL, hInst, NULL);
     if (!g_hWnd) return 1;
 
-    // Center on screen
-    RECT rc;
-    GetWindowRect(g_hWnd, &rc);
-    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    SetWindowPos(g_hWnd, NULL, (sw - 440) / 2, (sh - 210) / 2, 440, 210, SWP_NOZORDER);
-
-    // Create controls
-    int y = 20;
-    g_hStatus = CreateWindowExA(0, "STATIC", "Initializing...",
+    // Status text
+    g_hStatus = CreateWindowExW(0, L"STATIC", L"Initializing...",
         WS_CHILD | WS_VISIBLE,
-        20, y, 400, 20, g_hWnd, NULL, hInst, NULL);
-    y += 30;
+        35, 98, 410, 20, g_hWnd, NULL, hInst, NULL);
+    SendMessage(g_hStatus, WM_SETFONT, (WPARAM)g_hNormFont, TRUE);
 
-    g_hProgress = CreateWindowExA(0, PROGRESS_CLASSA, NULL,
+    // Progress bar (themed)
+    g_hProgress = CreateWindowExW(0, L"msctls_progress32", NULL,
         WS_CHILD | WS_VISIBLE,
-        20, y, 400, 22, g_hWnd, NULL, hInst, NULL);
+        35, 122, 410, 18, g_hWnd, (HMENU)IDC_PROGRESS, hInst, NULL);
     SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-    y += 35;
+    SendMessage(g_hProgress, PBM_SETBARCOLOR, 0, CLR_ACCENT);
 
-    g_hVersion = CreateWindowExA(0, "STATIC", "",
+    // Version info
+    g_hVersion = CreateWindowExW(0, L"STATIC", L"",
         WS_CHILD | WS_VISIBLE,
-        20, y, 400, 18, g_hWnd, NULL, hInst, NULL);
-    y += 30;
+        35, 148, 410, 18, g_hWnd, NULL, hInst, NULL);
+    SendMessage(g_hVersion, WM_SETFONT, (WPARAM)g_hNormFont, TRUE);
 
-    g_hLaunch = CreateWindowExA(0, "BUTTON", "Launch Game",
+    // Launch button (prominent)
+    g_hLaunch = CreateWindowExW(0, L"BUTTON", L"Launch Game",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        20, y, 130, 36, g_hWnd, (HMENU)IDC_LAUNCH, hInst, NULL);
+        35, 178, 180, 42, g_hWnd, (HMENU)IDC_LAUNCH, hInst, NULL);
+    SendMessage(g_hLaunch, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
     EnableWindow(g_hLaunch, FALSE);
 
-    g_hUpdate = CreateWindowExA(0, "BUTTON", "Update Available",
+    // Update button
+    g_hUpdate = CreateWindowExW(0, L"BUTTON", L"Update Available",
         WS_CHILD | BS_PUSHBUTTON,
-        165, y, 130, 36, g_hWnd, (HMENU)IDC_UPDATE, hInst, NULL);
+        230, 178, 130, 42, g_hWnd, (HMENU)IDC_UPDATE, hInst, NULL);
+    SendMessage(g_hUpdate, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
     ShowWindow(g_hUpdate, SW_HIDE);
 
-    g_hWebLink = CreateWindowExA(0, "BUTTON", "GitHub",
+    // GitHub button
+    g_hWebLink = CreateWindowExW(0, L"BUTTON", L"GitHub",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        310, y, 110, 36, g_hWnd, (HMENU)IDC_WEBLINK, hInst, NULL);
-    y += 48;
+        375, 178, 80, 42, g_hWnd, (HMENU)IDC_WEBLINK, hInst, NULL);
+    SendMessage(g_hWebLink, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
-    // Footer text
-    char footer[128];
-    sprintf_s(footer, "FN Cheat Launcher - github.com/%s/%s", GITHUB_USER, GITHUB_REPO);
-    HWND hFooter = CreateWindowExA(0, "STATIC", footer,
-        WS_CHILD | WS_VISIBLE,
-        20, y, 400, 16, g_hWnd, NULL, hInst, NULL);
-    (void)hFooter;
+    // Footer
+    HWND hFooter = CreateWindowExW(0, L"STATIC", L"nitaysc/fn-launcher  \xb7  github.com",
+        WS_CHILD | WS_VISIBLE, 35, 238, 410, 16, g_hWnd, NULL, hInst, NULL);
+    SendMessage(hFooter, WM_SETFONT, (WPARAM)g_hNormFont, TRUE);
 
-    // Start worker in background
     std::thread(WorkerThread).detach();
 
-    // Message loop
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
+    DeleteObject(g_hTitleFont);
+    DeleteObject(g_hNormFont);
+    DeleteObject(g_hBtnFont);
+    DeleteObject(g_bgBrush);
+    DeleteObject(g_whiteBrush);
     return 0;
 }
