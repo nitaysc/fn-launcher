@@ -358,7 +358,7 @@ void Write(uint64_t addr, const T& val) {
 uint64_t GetUWorld()
 {
     if (!g_targetPID || !g_gameBase) return 0;
-    uint64_t encrypted = Read<uint64_t>(g_gameBase + offsets::core::UWORLD);
+    uint64_t encrypted = Read<uint64_t>(g_gameBase + offsets::core::GWorld);
     return offsets::uworld::decrypt(encrypted);
 }
 
@@ -368,9 +368,9 @@ void DebugUWorld()
         printf("[-] No target\n"); return;
     }
     printf("[DBG] gameBase=0x%llX\n", (unsigned long long)g_gameBase);
-    printf("[DBG] reading UWorld from: 0x%llX\n", (unsigned long long)(g_gameBase + offsets::core::UWORLD));
+    printf("[DBG] reading UWorld from: 0x%llX\n", (unsigned long long)(g_gameBase + offsets::core::GWorld));
     
-    uint64_t encrypted = Read<uint64_t>(g_gameBase + offsets::core::UWORLD);
+    uint64_t encrypted = Read<uint64_t>(g_gameBase + offsets::core::GWorld);
     printf("[DBG] encrypted=0x%llX\n", (unsigned long long)encrypted);
     
     uint64_t decrypted = offsets::uworld::decrypt(encrypted);
@@ -787,24 +787,53 @@ FVec3 GetCameraLocation()
 {
     uint64_t uworld = GetUWorld();
     if (!uworld) return {};
-    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
-    if (!viewArrayData) return {};
 
     static int dbgC = 0;
-    bool dbgP = (++dbgC % 240) == 0; // print every ~4 seconds
+    bool dbgP = (++dbgC % 240) == 0;
     if (dbgC > 100000) dbgC = 0;
 
-    uint32_t locOffsets[] = { 0, 0x40, 0x60, 0x80, 0xA0, 0x100 };
-    for (auto off : locOffsets) {
-        FVec3 loc = Read<FVec3>(viewArrayData + off);
-        if (fabs(loc.x) > 1.0 && fabs(loc.x) < 1000000.0 &&
-            fabs(loc.y) > 1.0 && fabs(loc.y) < 1000000.0 &&
-            fabs(loc.z) > 1.0 && fabs(loc.z) < 1000000.0) {
-            if (dbgP) printf("[CAM] offset 0x%X: (%.0f,%.0f,%.0f)\n",
-                off, loc.x, loc.y, loc.z);
-            return loc;
+    // Method 1: scan CachedViewInfoRenderedLastFrame from 0 to 0x1800
+    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
+    if (viewArrayData) {
+        for (uint32_t off = 0; off < 0x1800; off += 0x40) {
+            FVec3 loc = Read<FVec3>(viewArrayData + off);
+            if (fabs(loc.x) > 1.0 && fabs(loc.x) < 1000000.0 &&
+                fabs(loc.y) > 1.0 && fabs(loc.y) < 1000000.0 &&
+                fabs(loc.z) > 1.0 && fabs(loc.z) < 1000000.0) {
+                if (dbgP) printf("[CAM] viewArray+0x%X: (%.0f,%.0f,%.0f)\n",
+                    off, loc.x, loc.y, loc.z);
+                return loc;
+            }
         }
     }
+
+    // Method 2: read from PlayerController -> CameraManager -> POV
+    if (g_targetPID) {
+        uint64_t gameInstance = Read<uint64_t>(uworld + offsets::core::GameInstance);
+        if (gameInstance) {
+            uint64_t localPlayers = Read<uint64_t>(gameInstance + offsets::player::LocalPlayers);
+            if (localPlayers) {
+                uint64_t localPlayer = Read<uint64_t>(localPlayers);
+                if (localPlayer) {
+                    uint64_t pc = Read<uint64_t>(localPlayer + offsets::player::PlayerController);
+                    if (pc) {
+                        uint64_t cm = Read<uint64_t>(pc + offsets::core::CameraManager);
+                        if (cm) {
+                            FVec3 loc = Read<FVec3>(cm + offsets::core::POV_Location);
+                            if (fabs(loc.x) > 1.0 && fabs(loc.x) < 1000000.0 &&
+                                fabs(loc.y) > 1.0 && fabs(loc.y) < 1000000.0 &&
+                                fabs(loc.z) > 1.0 && fabs(loc.z) < 1000000.0) {
+                                if (dbgP) printf("[CAM] CameraManager POV: (%.0f,%.0f,%.0f)\n",
+                                    loc.x, loc.y, loc.z);
+                                return loc;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     return {};
 }
 
@@ -1014,9 +1043,16 @@ void CollectESPData(ESPFrame& frame)
 
     uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
     int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
-    if (!viewArrayData || viewArrayCount <= 0) return;
-    frame.viewProj = Read<FMatrix>(viewArrayData + 256);
-    g_viewProjectionMatrix = frame.viewProj;
+    if (viewArrayData && viewArrayCount > 0) {
+        frame.viewProj = Read<FMatrix>(viewArrayData + 256);
+        if (frame.viewProj.m[3][3] == 0.0) {
+            for (uint32_t off = 0; off < 0x1800; off += 0x40) {
+                frame.viewProj = Read<FMatrix>(viewArrayData + off);
+                if (frame.viewProj.m[3][3] != 0.0 && fabs(frame.viewProj.m[3][3]) < 100.0) break;
+            }
+        }
+        g_viewProjectionMatrix = frame.viewProj;
+    }
 
     FVec3 localPos = {};
     frame.localTeam = 0;
@@ -1368,7 +1404,7 @@ bool AttachToFortnite()
     g_gameBase = gameBase;
     printf("[+] Attached PID=%u Base=0x%llX\n", pid, (unsigned long long)gameBase);
 
-    uint64_t enc = Read<uint64_t>(gameBase + offsets::core::UWORLD);
+    uint64_t enc = Read<uint64_t>(gameBase + offsets::core::GWorld);
     printf("[DBG] UWorld encrypted=0x%llX\n", (unsigned long long)enc);
 
     // Test xhunter1 cmd 786 as a potential write command (single, safe test)
