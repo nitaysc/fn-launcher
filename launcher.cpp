@@ -398,8 +398,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 CloseHandle(snap);
                 Sleep(300);
             }
-            // Force a completely fresh process via runas verb
-            ShellExecuteA(NULL, "runas", exePath.c_str(), NULL, GetLocalPath("").c_str(), SW_SHOW);
+            // Launch with ShellExecute - clean process creation
+            ShellExecuteA(NULL, "open", exePath.c_str(), NULL, GetLocalPath("").c_str(), SW_SHOW);
             SetStatus("Cheat launched");
         }
         if (id == IDC_UPDATE) {
