@@ -417,6 +417,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             SetStatus("Cheat launched");
+            // Focus Fortnite window
+            Sleep(1000);
+            EnumWindows([](HWND hw, LPARAM) -> BOOL {
+                wchar_t cls[64]; GetClassNameW(hw, cls, 64);
+                if (wcscmp(cls, L"UnrealWindow") == 0) {
+                    wchar_t title[128]; GetWindowTextW(hw, title, 128);
+                    if (wcsstr(title, L"Fortnite") || wcsstr(title, L" 1")) {
+                        SetForegroundWindow(hw);
+                        return FALSE;
+                    }
+                }
+                return TRUE;
+            }, 0);
         }
         if (id == IDC_UPDATE) {
             g_ready = false;
