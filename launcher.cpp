@@ -225,28 +225,37 @@ void ShowUpdateBtn(bool show)
     if (g_hUpdate) ShowWindow(g_hUpdate, show ? SW_SHOW : SW_HIDE);
 }
 
-bool InstallDriver()
+bool EnsureDriver(const char* service, const char* sysFile, const char* display)
 {
-    std::string sysPath = GetLocalPath(DRIVER_SYS);
-    if (!FileExists(sysPath.c_str())) {
-        SetStatus("Driver file not found");
-        return false;
-    }
-    char buf[512];
-    sprintf_s(buf, "sc query " DRIVER_SERVICE);
+    std::string sysPath = GetLocalPath(sysFile);
+    if (!FileExists(sysPath.c_str())) return false;
+
+    char buf[1024];
+    // Check if service exists
+    sprintf_s(buf, "sc query %s", service);
     if (RunCmd(buf)) {
-        sprintf_s(buf, "sc start " DRIVER_SERVICE);
+        // Exists, just start it
+        sprintf_s(buf, "sc start %s", service);
         RunCmd(buf, false);
         return true;
     }
-    sprintf_s(buf, "sc create " DRIVER_SERVICE " binPath= \"%s\" type= kernel", sysPath.c_str());
-    if (!RunCmd(buf)) {
-        SetStatus("Failed to create driver service");
-        return false;
-    }
-    sprintf_s(buf, "sc start " DRIVER_SERVICE);
+    // Create and start
+    sprintf_s(buf, "sc create %s binPath= \"%s\" type= kernel start= auto DisplayName= \"%s\"",
+        service, sysPath.c_str(), display ? display : service);
+    if (!RunCmd(buf)) return false;
+    sprintf_s(buf, "sc start %s", service);
     RunCmd(buf, false);
     return true;
+}
+
+void InstallDrivers()
+{
+    SetStatus("Installing gamepad driver...");
+    EnsureDriver("vigembus", "ViGEmBus.sys", "Nefarius Virtual Gamepad Emulation Service");
+    Sleep(200);
+    SetStatus("Installing memory driver...");
+    EnsureDriver(DRIVER_SERVICE, DRIVER_SYS, "xhunter1 kernel driver");
+    Sleep(200);
 }
 
 void WorkerThread()
@@ -302,9 +311,7 @@ void WorkerThread()
             return;
         }
     }
-    SetStatus("Starting driver...");
-    InstallDriver();
-    Sleep(300);
+    InstallDrivers();
     SetProgress(100);
     g_ready = true;
     SetStatus("Ready! Click Launch to start.");
