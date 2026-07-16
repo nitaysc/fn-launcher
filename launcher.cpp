@@ -159,8 +159,32 @@ static std::string FindAssetUrl(const std::string& j, const char* namePart)
     }
     return "";
 }
+static bool RunHidden(const char* cmd, const char* dir)
+{
+    STARTUPINFOA si = { sizeof(si) }; si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    char c[1024]; strcpy_s(c, cmd);
+    if (CreateProcessA(NULL, c, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD ec = 1; GetExitCodeProcess(pi.hProcess, &ec);
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        return ec == 0;
+    }
+    return false;
+}
 static bool UnzipTo(const char* zip, const char* dst)
 {
+    SHCreateDirectoryExA(NULL, dst, NULL);
+    // Method 1: tar (built-in on Windows 10/11)
+    char cmd[1024]; sprintf_s(cmd, "tar.exe -xf \"%s\" -C \"%s\"", zip, dst);
+    LogMsg("Extract: trying tar: %s", cmd);
+    if (RunHidden(cmd, dst)) { LogMsg("Extract: tar succeeded"); return true; }
+    // Method 2: PowerShell Expand-Archive
+    sprintf_s(cmd, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path '%s' -DestinationPath '%s' -Force\"", zip, dst);
+    LogMsg("Extract: trying powershell");
+    if (RunHidden(cmd, dst)) { LogMsg("Extract: powershell succeeded"); return true; }
+    // Method 3: Shell COM (original fallback)
+    LogMsg("Extract: trying Shell COM fallback");
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED); bool ok = false;
     wchar_t wz[MAX_PATH], wd[MAX_PATH];
     MultiByteToWideChar(CP_UTF8,0,zip,-1,wz,MAX_PATH); MultiByteToWideChar(CP_UTF8,0,dst,-1,wd,MAX_PATH);
@@ -174,7 +198,9 @@ static bool UnzipTo(const char* zip, const char* dst)
                     VariantInit(&vo); vo.vt=VT_I4; vo.lVal=0x14; fd->CopyHere(vs,vo); ok=true; fd->Release(); }
                 VariantClear(&vDt); its->Release(); } f->Release(); }
         VariantClear(&vD); sh->Release();
-    } CoUninitialize(); return ok;
+    } CoUninitialize();
+    LogMsg("Extract: Shell COM result=%d", (int)ok);
+    return ok;
 }
 static bool ServiceExists(const char* svc)
 {
