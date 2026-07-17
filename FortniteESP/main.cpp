@@ -956,12 +956,8 @@ void CollectESPData(ESPFrame& frame)
     const int MAX_RENDER_PLAYERS = 64;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
-    // Batch-read all player state pointers (1 driver call instead of playerCount calls)
-    std::vector<uint64_t> allStates(playerCount);
-    ReadBuffer(playerArrayData, allStates.data(), playerCount * sizeof(uint64_t));
-
     for (int i = 0; i < playerCount; i++) {
-        uint64_t playerState = allStates[i];
+        uint64_t playerState = Read<uint64_t>(playerArrayData + i * 8);
         if (!playerState) continue;
 
         uint64_t pawn = Read<uint64_t>(playerState + offsets::player::PawnPrivate);
@@ -1017,7 +1013,8 @@ FMatrix GetCurrentViewProj()
     uint64_t uworld = GetUWorld();
     if (!uworld) return g_frames[g_renderFrameIdx].viewProj;
     uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
-    if (!viewArrayData) return g_frames[g_renderFrameIdx].viewProj;
+    int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
+    if (!viewArrayData || viewArrayCount <= 0) return g_frames[g_renderFrameIdx].viewProj;
     FMatrix mat = Read<FMatrix>(viewArrayData + 256);
     if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
     return mat;
