@@ -131,7 +131,7 @@ struct AimbotSettings {
     bool visibleCheck = false;
     float randomSkip = 0.00f;  // skip frames randomly
     float randomOffset = 0.5f; // max degrees of random noise
-    float stickSensitivity = 0.50f; // right stick sensitivity (lower = less jitter with high controller sens)
+    float stickSensitivity = 0.65f; // lower = less jitter with high sens, adjust in menu
     float stickDeadzone = 0.06f;    // deadzone fraction (0.0-0.2)
     int aimToggleKey = 0x50;        // 'P' key to toggle aimbot master switch
     bool masterEnabled = true;      // toggled by aimToggleKey
@@ -611,14 +611,14 @@ void RunAimbot()
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float deflection = (0.06f + 0.94f * pow(t, exponent)) * g_aim.stickSensitivity;
+    float deflection = (0.08f + 0.92f * pow(t, exponent)) * g_aim.stickSensitivity;
 
     if (pixelDist < 10.0f && deflection > 0.40f)
         deflection = 0.40f;
 
     float closeRange = 50.0f;
     if (pixelDist < closeRange) {
-        float maxClose = 0.12f + (g_aim.stickSensitivity - 0.12f) * (pixelDist / closeRange);
+        float maxClose = 0.16f + (g_aim.stickSensitivity - 0.16f) * (pixelDist / closeRange);
         if (deflection > maxClose) deflection = maxClose;
     }
 
