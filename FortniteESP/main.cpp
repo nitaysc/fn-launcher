@@ -921,7 +921,9 @@ void CollectESPData(ESPFrame& frame)
     if (!playerController) return;
     uint64_t localPawn = Read<uint64_t>(playerController + offsets::player::LocalPawn);
 
-    frame.viewProj = {};
+    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
+    if (!viewArrayData) return;
+    frame.viewProj = Read<FMatrix>(viewArrayData + 256);
 
     FVec3 localPos = {};
     frame.localTeam = 0;
@@ -1012,21 +1014,11 @@ void ESPThreadFunc()
 FMatrix GetCurrentViewProj()
 {
     if (!g_targetPID) return g_frames[g_renderFrameIdx].viewProj;
-
-    static uint64_t cachedUWorld = 0;
-    static uint64_t cachedViewArrayData = 0;
-    static int refreshCounter = 0;
-
-    if (++refreshCounter >= 60 || !cachedUWorld) {
-        refreshCounter = 0;
-        cachedUWorld = GetUWorld();
-        if (cachedUWorld)
-            cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
-    }
-
-    if (!cachedUWorld || !cachedViewArrayData) return g_frames[g_renderFrameIdx].viewProj;
-
-    FMatrix mat = Read<FMatrix>(cachedViewArrayData + 256);
+    uint64_t uworld = GetUWorld();
+    if (!uworld) return g_frames[g_renderFrameIdx].viewProj;
+    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
+    if (!viewArrayData) return g_frames[g_renderFrameIdx].viewProj;
+    FMatrix mat = Read<FMatrix>(viewArrayData + 256);
     if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
     return mat;
 }
