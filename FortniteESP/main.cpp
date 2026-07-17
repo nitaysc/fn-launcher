@@ -538,21 +538,6 @@ void RunAimbot()
     if (!WorldToScreen(targetPos, screen)) return;
     bestScreen = screen;
 
-    // Velocity prediction with EMA smoothing to prevent jitter
-    static FVec3 prevTargetPos3D = { 0,0,0 };
-    static FVec3 smoothedVel = { 0,0,0 };
-    if (prevTargetPos3D.x != 0 || prevTargetPos3D.y != 0 || prevTargetPos3D.z != 0) {
-        FVec3 rawVel = { targetPos.x - prevTargetPos3D.x, targetPos.y - prevTargetPos3D.y, targetPos.z - prevTargetPos3D.z };
-        smoothedVel.x = smoothedVel.x * 0.5f + rawVel.x * 0.5f;
-        smoothedVel.y = smoothedVel.y * 0.5f + rawVel.y * 0.5f;
-        smoothedVel.z = smoothedVel.z * 0.5f + rawVel.z * 0.5f;
-        FVec3 predicted = { targetPos.x + smoothedVel.x * 0.4f, targetPos.y + smoothedVel.y * 0.4f, targetPos.z + smoothedVel.z * 0.4f };
-        FVec2 predictedScreen;
-        if (WorldToScreen(predicted, predictedScreen))
-            bestScreen = predictedScreen;
-    }
-    prevTargetPos3D = targetPos;
-
     // Proportional control: smooth approach, no oscillation
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
@@ -561,7 +546,7 @@ void RunAimbot()
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
     // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
-    float deadzonePx = 1.0f + g_aim.smooth * 5.0f;  // 1.05px (OP) .. 3.5px (smooth)
+    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -572,7 +557,7 @@ void RunAimbot()
 
     // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
     // This naturally slows down as it approaches the target, preventing overshoot.
-    float floorDeflect = 0.08f;                       // minimal nudge to correct small errors
+    float floorDeflect = 0.18f;                       // always move a bit so small errors get corrected
     float farDist = 120.0f;                           // distance at which we hit max stick deflection
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
@@ -580,8 +565,8 @@ void RunAimbot()
     float targetDeflect = floorDeflect + (g_aim.stickSensitivity - floorDeflect) * t;
 
     // Small hard cap very close to target to kill any residual oscillation
-    if (pixelDist < 8.0f && targetDeflect > 0.25f)
-        targetDeflect = 0.25f;
+    if (pixelDist < 8.0f && targetDeflect > 0.35f)
+        targetDeflect = 0.35f;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
@@ -966,10 +951,10 @@ void CollectESPData(ESPFrame& frame)
 
     // Collect all players within maxDistance, then keep the closest ones.
     // This ensures nearby enemies always get ESP even in 100-player lobbies.
-    const int MAX_RENDER_PLAYERS = 40;
+    const int MAX_RENDER_PLAYERS = 64;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
-    // Batch-read all player state pointers in one driver call (saves ~100 Read calls)
+    // Batch-read all player state pointers (1 driver call instead of playerCount calls)
     std::vector<uint64_t> allStates(playerCount);
     ReadBuffer(playerArrayData, allStates.data(), playerCount * sizeof(uint64_t));
 
@@ -1032,17 +1017,14 @@ FMatrix GetCurrentViewProj()
     static uint64_t cachedViewArrayData = 0;
     static int refreshCounter = 0;
 
-    if (++refreshCounter >= 30 || !cachedUWorld) {
+    if (++refreshCounter >= 60 || !cachedUWorld) {
         refreshCounter = 0;
         cachedUWorld = GetUWorld();
-        if (!cachedUWorld) return g_frames[g_renderFrameIdx].viewProj;
-        cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
+        if (cachedUWorld)
+            cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
     }
 
-    if (!cachedViewArrayData) {
-        cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
-        if (!cachedViewArrayData) return g_frames[g_renderFrameIdx].viewProj;
-    }
+    if (!cachedUWorld || !cachedViewArrayData) return g_frames[g_renderFrameIdx].viewProj;
 
     FMatrix mat = Read<FMatrix>(cachedViewArrayData + 256);
     if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
@@ -1525,7 +1507,6 @@ int main()
 
     g_espThreadRunning = true;
     g_espThread = std::thread(ESPThreadFunc);
-    SetThreadPriority(g_espThread.native_handle(), THREAD_PRIORITY_LOWEST);
 
     bool done = false;
     bool showMenu = true;
@@ -1564,7 +1545,7 @@ int main()
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_pSwapChain->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
+        g_pSwapChain->Present(0, 0);
 
         // Frame limiter: wait until target time reached from last frame
         LARGE_INTEGER now;
@@ -1572,7 +1553,11 @@ int main()
         double elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
         if (elapsed < (1.0 / 60.0)) {
             DWORD sleepMs = (DWORD)(((1.0 / 60.0) - elapsed) * 1000.0);
-            if (sleepMs > 0) Sleep(sleepMs);
+            if (sleepMs > 1) Sleep(sleepMs - 1);
+            do {
+                QueryPerformanceCounter(&now);
+                elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
+            } while (elapsed < (1.0 / 60.0));
         }
         QueryPerformanceCounter(&lastFrame);
     }
