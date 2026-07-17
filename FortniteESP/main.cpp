@@ -546,7 +546,7 @@ void RunAimbot()
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
     // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
-    float deadzonePx = 2.0f + g_aim.smooth * 4.0f;  // 2.05px (OP) .. 4.0px (smooth)
+    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -557,7 +557,7 @@ void RunAimbot()
 
     // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
     // This naturally slows down as it approaches the target, preventing overshoot.
-    float floorDeflect = 0.10f;                       // minimal nudge so small errors get corrected
+    float floorDeflect = 0.12f;                       // minimal nudge so tiny errors get corrected
     float farDist = 120.0f;                           // distance at which we hit max stick deflection
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
@@ -565,16 +565,16 @@ void RunAimbot()
     float targetDeflect = floorDeflect + (g_aim.stickSensitivity - floorDeflect) * t;
 
     // Small hard cap very close to target to kill any residual oscillation
-    if (pixelDist < 8.0f && targetDeflect > 0.25f)
-        targetDeflect = 0.25f;
+    if (pixelDist < 8.0f && targetDeflect > 0.35f)
+        targetDeflect = 0.35f;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    // Adaptive output smoothing: SLOW when far (prevents momentum jitter during camera movement),
-    // FAST when close (precise lock-on).
-    float alphaClose = 0.72f + g_aim.smooth * 0.15f;  // fast convergence near target
-    float alphaFar   = 0.35f + g_aim.smooth * 0.25f;  // slow buildup far away — no jitter
+    // Adaptive output smoothing: less inertia when far (prevents overshoot),
+    // more inertia when close (keeps it smooth).
+    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
+    float alphaFar   = 0.60f + g_aim.smooth * 0.10f;
     float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
     if (alphaT < 0.0f) alphaT = 0.0f;
     if (alphaT > 1.0f) alphaT = 1.0f;
@@ -582,17 +582,6 @@ void RunAimbot()
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
-
-    // Rate limiter: cap how fast the stick can change per frame.
-    // Prevents jitter when camera moves fast and target screen position jumps.
-    float maxDelta = 0.12f;
-    float dnx = nx - prevNX;
-    if (dnx > maxDelta)  nx = prevNX + maxDelta;
-    if (dnx < -maxDelta) nx = prevNX - maxDelta;
-    float dny = ny - prevNY;
-    if (dny > maxDelta)  ny = prevNY + maxDelta;
-    if (dny < -maxDelta) ny = prevNY - maxDelta;
-
     prevNX = nx;
     prevNY = ny;
 
