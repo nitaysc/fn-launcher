@@ -470,11 +470,13 @@ void RunAimbot()
         bool hasPos = false;
         if (cp.pd.hasBones) {
             targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
+            targetPos.z += 10.0; // bone is neck base, lift to top of head
             hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
         }
         if (!hasPos) {
             if (cp.pd.hasBones) {
                 targetPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
+                targetPos.z += 5.0; // center of chest
                 hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
             }
         }
@@ -526,7 +528,7 @@ void RunAimbot()
     }
 
     float floorDeflect = 0.08f;
-    float farDist = 150.0f;
+    float farDist = 100.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
@@ -535,9 +537,9 @@ void RunAimbot()
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    float alphaClose = 0.40f + g_aim.smooth * 0.20f;
-    float alphaFar = 0.65f + g_aim.smooth * 0.10f;
-    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
+    float alphaClose = 0.55f + g_aim.smooth * 0.25f;
+    float alphaFar = 0.80f + g_aim.smooth * 0.10f;
+    float alphaT = (pixelDist - 20.0f) / (60.0f - 20.0f);
     if (alphaT < 0.0f) alphaT = 0.0f;
     if (alphaT > 1.0f) alphaT = 1.0f;
     float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
