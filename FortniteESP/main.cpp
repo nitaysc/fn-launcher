@@ -583,7 +583,7 @@ void RunAimbot()
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float deflection = (0.12f + 0.88f * pow(t, exponent)) * g_aim.stickSensitivity;
+    float deflection = (0.05f + 0.95f * pow(t, exponent)) * g_aim.stickSensitivity;
 
     if (pixelDist < 10.0f && deflection > 0.40f)
         deflection = 0.40f;
