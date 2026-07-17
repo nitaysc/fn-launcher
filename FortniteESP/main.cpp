@@ -1073,8 +1073,8 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    // Use cached view matrix from data thread (no driver calls in render thread)
-    g_viewProjectionMatrix = frame.viewProj;
+    // Read current view matrix every frame so ESP stays glued to players
+    g_viewProjectionMatrix = GetCurrentViewProj();
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
