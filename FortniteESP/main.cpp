@@ -433,6 +433,9 @@ void RunAimbot()
 
     static bool keyHeld = false;
     static float prevNX = 0.0f, prevNY = 0.0f;
+    static uint64_t prevLockedPawn = 0;
+    static FVec3 prevTargetPos = { 0.0, 0.0, 0.0 };
+    static bool prevTargetValid = false;
     bool keyDown = (GetAsyncKeyState(g_aim.aimKey) & 0x8000) != 0;
     if (!keyDown) {
         if (keyHeld) {
@@ -441,11 +444,14 @@ void RunAimbot()
             keyHeld = false;
         }
         prevNX = 0.0f; prevNY = 0.0f;
+        prevLockedPawn = 0;
+        prevTargetValid = false;
         return;
     }
     if (!keyHeld) {
         keyHeld = true;
         prevNX = 0.0f; prevNY = 0.0f;
+        prevTargetValid = false;
     }
 
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
@@ -453,13 +459,11 @@ void RunAimbot()
 
     if ((rand() % 1000) < (int)(g_aim.randomSkip * 1000.0f)) return;
 
-    // FOV radius in pixels (matches the visual FOV circle)
     float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
     float bestDist = fovRadius;
     uint64_t bestPawn = 0;
     FVec2 bestScreen = {};
 
-    // Target stickiness: prefer current target unless another is 40% closer
     static uint64_t lockedPawn = 0;
 
     for (size_t i = 0; i < frame.players.size(); i++) {
@@ -467,32 +471,31 @@ void RunAimbot()
         if (!cp.valid) continue;
         if (!g_aim.aimAtTeam && cp.pd.teamIndex == frame.localTeam && frame.localTeam != 0) continue;
 
-        FVec3 targetPos;
+        FVec3 tPos;
         bool hasPos = false;
         if (cp.pd.hasBones) {
-            targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-            targetPos.z += 10.0; // top of head, not neck
-            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+            tPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
+            tPos.z += 10.0;
+            hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) {
             if (cp.pd.hasBones) {
-                targetPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
-                hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+                tPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
+                hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
             }
         }
         if (!hasPos) {
-            targetPos = cp.pd.position;
-            targetPos.z += 170.0; // approximate head height when no bones
-            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+            tPos = cp.pd.position;
+            tPos.z += 170.0;
+            hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) continue;
 
         FVec2 screen;
-        if (!WorldToScreen(targetPos, screen)) continue;
+        if (!WorldToScreen(tPos, screen)) continue;
 
         float screenDist = ScreenDistToCrosshair(screen);
-        // Bias toward locked target (40% advantage = new target must be 40% closer to steal)
-        if (cp.pawn == lockedPawn) screenDist *= 0.6f;
+        if (cp.pawn == lockedPawn) screenDist *= 0.3f;  // tight lock: new target must be 70% closer to steal
         if (screenDist < bestDist) {
             bestDist = screenDist;
             bestPawn = cp.pawn;
@@ -505,24 +508,27 @@ void RunAimbot()
         XUSB_REPORT report = {};
         g_vigem.Update(report);
         prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
+        prevTargetValid = false;
         return;
     }
     if (lockedPawn != bestPawn) {
         prevNX = 0.0f; prevNY = 0.0f;
+        prevTargetValid = false;
     }
     lockedPawn = bestPawn;
 
-    // Find the locked target in the current frame (robust against sorting)
+    // Recompute target world position and predict ahead
     const CachedPlayer* bestCp = nullptr;
     for (const auto& cp : frame.players) {
         if (cp.pawn == bestPawn && cp.valid) { bestCp = &cp; break; }
     }
     if (!bestCp) return;
+
     FVec3 targetPos;
     bool hasPos = false;
     if (bestCp->pd.hasBones) {
         targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
-        targetPos.z += 10.0; // top of head, not neck
+        targetPos.z += 10.0;
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos && bestCp->pd.hasBones) {
@@ -531,24 +537,38 @@ void RunAimbot()
     }
     if (!hasPos) {
         targetPos = bestCp->pd.position;
-        targetPos.z += 170.0; // approximate head height when no bones
+        targetPos.z += 170.0;
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos) return;
 
+    FVec3 aimPos = targetPos;
+    if (prevTargetValid && lockedPawn == prevLockedPawn) {
+        FVec3 velocity = {
+            targetPos.x - prevTargetPos.x,
+            targetPos.y - prevTargetPos.y,
+            targetPos.z - prevTargetPos.z
+        };
+        aimPos.x += velocity.x * 1.5f;
+        aimPos.y += velocity.y * 1.5f;
+        aimPos.z += velocity.z * 1.5f;
+    }
+    prevLockedPawn = lockedPawn;
+    prevTargetPos = targetPos;
+    prevTargetValid = true;
+
     FVec2 screen;
-    if (!WorldToScreen(targetPos, screen)) return;
+    if (!WorldToScreen(aimPos, screen)) return;
     bestScreen = screen;
 
-    // Proportional control: smooth approach, no oscillation
+    // v1.0 proven math: power curve with floor, close-range caps, light smoothing
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
-    // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
-    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
+    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -557,31 +577,27 @@ void RunAimbot()
         return;
     }
 
-    // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
-    // This naturally slows down as it approaches the target, preventing overshoot.
-    float floorDeflect = 0.12f;                       // minimal nudge so tiny errors get corrected
-    float farDist = 120.0f;                           // distance at which we hit max stick deflection
+    float exponent = 0.45f + g_aim.smooth * 1.2f;
+    float farDist = 160.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float targetDeflect = floorDeflect + (g_aim.stickSensitivity - floorDeflect) * t;
+    float deflection = (0.12f + 0.88f * pow(t, exponent)) * g_aim.stickSensitivity;
 
-    // Small hard cap very close to target to kill any residual oscillation
-    if (pixelDist < 8.0f && targetDeflect > 0.35f)
-        targetDeflect = 0.35f;
+    if (pixelDist < 10.0f && deflection > 0.40f)
+        deflection = 0.40f;
 
-    float targetNX = (dx / pixelDist) * targetDeflect;
-    float targetNY = (dy / pixelDist) * targetDeflect;
+    float closeRange = 50.0f;
+    if (pixelDist < closeRange) {
+        float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
+        if (deflection > maxClose) deflection = maxClose;
+    }
 
-    // Adaptive output smoothing: less inertia when far (prevents overshoot),
-    // more inertia when close (keeps it smooth).
-    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
-    float alphaFar   = 0.60f + g_aim.smooth * 0.10f;
-    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
-    if (alphaT < 0.0f) alphaT = 0.0f;
-    if (alphaT > 1.0f) alphaT = 1.0f;
-    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
+    float targetNX = (dx / pixelDist) * deflection;
+    float targetNY = (dy / pixelDist) * deflection;
 
+    float alpha = 0.38f + g_aim.smooth * 0.40f;
+    if (pixelDist < 25.0f) alpha *= 0.55f;
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
