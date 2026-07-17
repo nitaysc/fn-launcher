@@ -603,14 +603,17 @@ void RunAimbot()
 
     float alpha = 0.30f + g_aim.smooth * 0.40f;
     if (pixelDist < 25.0f) alpha *= 0.45f;
-    // Detect camera movement: if target screen pos jumps >15px in one frame,
-    // the camera is moving fast — heavily dampen aimbot to prevent jitter
+    // Detect camera movement: if target screen pos jumped significantly,
+    // the camera is moving fast — kill all aimbot momentum to prevent jitter
     static FVec2 lastScreen = { 0, 0 };
     static bool lastScreenValid = false;
     if (lastScreenValid) {
         float jump = sqrtf((bestScreen.x - lastScreen.x) * (bestScreen.x - lastScreen.x) +
                            (bestScreen.y - lastScreen.y) * (bestScreen.y - lastScreen.y));
-        if (jump > 15.0f) alpha *= 0.2f;  // camera shake — 80% less aimbot response
+        if (jump > 12.0f) {
+            prevNX = 0.0f; prevNY = 0.0f;  // kill momentum
+            alpha = 0.05f;                  // nearly zero response this frame
+        }
     }
     lastScreen = bestScreen;
     lastScreenValid = true;
