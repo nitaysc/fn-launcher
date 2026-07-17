@@ -633,7 +633,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM w, LPARAM lp)
         // Footer note
         DrawTxt(hdc, "Launcher will start the cheat and bring Fortnite to the foreground",
             cx, CARD_B-20, cw,16, CLR_SUBTEXT, g_fntSmall, DT_CENTER);
-        char ftr[128]; sprintf_s(ftr,"%s/%s  |  github.com",GITHUB_USER,GITHUB_REPO);
+        char ftr[128];
+        if (g_latestVer[0] && strcmp(g_latestVer,"0") != 0)
+            sprintf_s(ftr,"%s/%s  |  %s",GITHUB_USER,GITHUB_REPO,g_latestVer);
+        else
+            sprintf_s(ftr,"%s/%s  |  checking...",GITHUB_USER,GITHUB_REPO);
         DrawTxt(hdc, ftr, CARD_L, WIN_H-28, WIN_W-40,16, CLR_SUBTEXT, g_fntSmall, DT_LEFT);
 
         EndPaint(hWnd, &ps);
