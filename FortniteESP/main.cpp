@@ -566,6 +566,30 @@ void RunAimbot()
     if (!WorldToScreen(aimPos, screen)) return;
     bestScreen = screen;
 
+    // Camera flick guard: if same locked pawn's screen position jumped >30px
+    // (camera moved fast), stop aimbot entirely for this frame — prevents jitter
+    static FVec2 lastScreenPos = { 0, 0 };
+    static uint64_t lastScreenPawn = 0;
+    static int skipCounter = 0;
+    if (lockedPawn == lastScreenPawn && lockedPawn != 0) {
+        float sj = sqrtf((bestScreen.x - lastScreenPos.x) * (bestScreen.x - lastScreenPos.x) +
+                         (bestScreen.y - lastScreenPos.y) * (bestScreen.y - lastScreenPos.y));
+        if (sj > 30.0f) {
+            skipCounter++;
+            XUSB_REPORT report = {};
+            g_vigem.Update(report);
+            prevNX = 0.0f; prevNY = 0.0f;
+            if (skipCounter > 8) {  // ~130ms timeout — flick ended, new position is valid
+                lastScreenPos = bestScreen;
+                skipCounter = 0;
+            }
+            return;
+        }
+    }
+    skipCounter = 0;
+    lastScreenPos = bestScreen;
+    lastScreenPawn = lockedPawn;
+
     // v1.0 proven math: power curve with floor, close-range caps, light smoothing
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
@@ -597,27 +621,11 @@ void RunAimbot()
         float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
         if (deflection > maxClose) deflection = maxClose;
     }
-    // Cap deflection for far targets (prevents stick slamming when camera moves fast)
-    if (pixelDist > 80.0f && deflection > 0.30f)
-        deflection = 0.30f;
 
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
 
-    // Rate-limit target direction changes (prevents jitter when camera moves fast)
-    static float prevTargetNX = 0.0f, prevTargetNY = 0.0f;
-    float maxDirChange = 0.20f;
-    float dtnx = targetNX - prevTargetNX;
-    if (dtnx > maxDirChange)  targetNX = prevTargetNX + maxDirChange;
-    if (dtnx < -maxDirChange) targetNX = prevTargetNX - maxDirChange;
-    float dtny = targetNY - prevTargetNY;
-    if (dtny > maxDirChange)  targetNY = prevTargetNY + maxDirChange;
-    if (dtny < -maxDirChange) targetNY = prevTargetNY - maxDirChange;
-    prevTargetNX = targetNX;
-    prevTargetNY = targetNY;
-
-    float alpha = 0.38f + g_aim.smooth * 0.40f;
-    if (pixelDist < 25.0f) alpha *= 0.55f;
+    float alpha = 0.45f + g_aim.smooth * 0.35f;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
