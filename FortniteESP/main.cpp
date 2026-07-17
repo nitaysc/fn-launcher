@@ -880,13 +880,13 @@ PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos
     }
 
     pd.hasBones = false;
-    if (pd.distance < 350.0f) {
+    if (pd.distance < 200.0f) {
         uint64_t mesh = Read<uint64_t>(pawn + offsets::player::Mesh);
         if (mesh) {
             MeshCache mc = GetMeshCache(mesh);
             if (mc.valid) {
                 // Full skeleton only for close players; far players only need head for aimbot
-                if (pd.distance < 100.0f) {
+                if (pd.distance < 60.0f) {
                     int ids[] = { BONE_HEAD, BONE_NECK, BONE_CHEST, BONE_PELVIS,
                         BONE_L_SHOULDER, BONE_L_ELBOW, BONE_L_HAND,
                         BONE_R_SHOULDER, BONE_R_ELBOW, BONE_R_HAND,
@@ -972,7 +972,7 @@ void CollectESPData(ESPFrame& frame)
 
     // Collect all players within maxDistance, then keep the closest ones.
     // This ensures nearby enemies always get ESP even in 100-player lobbies.
-    const int MAX_RENDER_PLAYERS = 64;
+    const int MAX_RENDER_PLAYERS = 40;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
     for (int i = 0; i < playerCount; i++) {
@@ -1019,7 +1019,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
     }
 }
 
@@ -1060,7 +1060,7 @@ void RenderESP()
 
         ImU32 color = GetPlayerColor(pd, frame.localTeam);
 
-        if (g_settings.showSkeleton && pd.distance < 100.0f)
+        if (g_settings.showSkeleton && pd.distance < 60.0f)
             DrawSkeleton(draw, pd, color);
 
         float minX = 99999, minY = 99999, maxX = -99999, maxY = -99999;
