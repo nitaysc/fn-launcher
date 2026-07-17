@@ -144,6 +144,7 @@ uint32_t g_targetPID = 0;
 uint64_t g_gameBase = 0;
 int g_playerCount = 0;
 int g_renderFrameIdx = 0;
+static double g_avgESPms = 0, g_avgAimMs = 0, g_avgDrawMs = 0, g_avgPresentMs = 0;
 
 struct ScreenBone { FVec2 s; bool visible; };
 
@@ -1043,7 +1044,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 }
 
@@ -1341,6 +1342,8 @@ void RenderMenu()
     else             ImGui::TextColored(ImVec4(1,1,0,1), "| Not Attached");
     ImGui::SameLine();
     ImGui::Text("| %d players | %.0f fps", g_playerCount, ImGui::GetIO().Framerate);
+    ImGui::Text("ESP:%.1fms Aim:%.1fms Draw:%.1fms Present:%.1fms",
+        g_avgESPms, g_avgAimMs, g_avgDrawMs, g_avgPresentMs);
 
     if (ImGui::Button("Reattach", ImVec2(-1, 0))) AttachToFortnite();
     ImGui::Spacing();
@@ -1575,17 +1578,40 @@ int main()
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        // === TIMING START ===
+        LARGE_INTEGER t0, t1, t2, t3, t4, t5;
+        QueryPerformanceCounter(&t0);
+
         g_renderFrameIdx = g_readIdx.load();
         if (showMenu) RenderMenu();
         RenderESP();
+        QueryPerformanceCounter(&t1);
         RunAimbot();
+        QueryPerformanceCounter(&t2);
 
         ImGui::Render();
         const float cc[4] = { 0, 0, 0, 0 };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        QueryPerformanceCounter(&t3);
         g_pSwapChain->Present(0, 0);
+        QueryPerformanceCounter(&t4);
+
+        static double avgESP = 0, avgAim = 0, avgDraw = 0, avgPresent = 0, avgTotal = 0;
+        static int frameCount = 0;
+        if (++frameCount >= 30) {
+            double espMs  = 1000.0 * (double)(t1.QuadPart - t0.QuadPart) / perfFreq.QuadPart;
+            double aimMs  = 1000.0 * (double)(t2.QuadPart - t1.QuadPart) / perfFreq.QuadPart;
+            double drawMs = 1000.0 * (double)(t3.QuadPart - t2.QuadPart) / perfFreq.QuadPart;
+            double presMs = 1000.0 * (double)(t4.QuadPart - t3.QuadPart) / perfFreq.QuadPart;
+            double totalMs= 1000.0 * (double)(t4.QuadPart - t0.QuadPart) / perfFreq.QuadPart;
+            g_avgESPms = g_avgESPms * 0.8 + espMs * 0.2;
+            g_avgAimMs = g_avgAimMs * 0.8 + aimMs * 0.2;
+            g_avgDrawMs = g_avgDrawMs * 0.8 + drawMs * 0.2;
+            g_avgPresentMs = g_avgPresentMs * 0.8 + presMs * 0.2;
+            frameCount = 0;
+        }
 
         // Frame limiter: wait until target time reached from last frame
         LARGE_INTEGER now;
