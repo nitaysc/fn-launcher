@@ -554,9 +554,9 @@ void RunAimbot()
             targetPos.y - prevTargetPos.y,
             targetPos.z - prevTargetPos.z
         };
-        aimPos.x += velocity.x * 0.5f;
-        aimPos.y += velocity.y * 0.5f;
-        aimPos.z += velocity.z * 0.5f;
+        aimPos.x += velocity.x * 0.8f;
+        aimPos.y += velocity.y * 0.8f;
+        aimPos.z += velocity.z * 0.8f;
     }
     prevLockedPawn = lockedPawn;
     prevTargetPos = targetPos;
@@ -601,8 +601,8 @@ void RunAimbot()
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
 
-    float alpha = 0.38f + g_aim.smooth * 0.40f;
-    if (pixelDist < 25.0f) alpha *= 0.55f;
+    float alpha = 0.30f + g_aim.smooth * 0.40f;
+    if (pixelDist < 25.0f) alpha *= 0.45f;
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
