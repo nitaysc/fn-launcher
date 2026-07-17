@@ -538,6 +538,17 @@ void RunAimbot()
     if (!WorldToScreen(targetPos, screen)) return;
     bestScreen = screen;
 
+    // Velocity prediction: track target movement to compensate for data latency
+    static FVec3 prevTargetPos3D = { 0,0,0 };
+    if (prevTargetPos3D.x != 0 || prevTargetPos3D.y != 0 || prevTargetPos3D.z != 0) {
+        FVec3 vel = { targetPos.x - prevTargetPos3D.x, targetPos.y - prevTargetPos3D.y, targetPos.z - prevTargetPos3D.z };
+        FVec3 predicted = { targetPos.x + vel.x * 0.4f, targetPos.y + vel.y * 0.4f, targetPos.z + vel.z * 0.4f };
+        FVec2 predictedScreen;
+        if (WorldToScreen(predicted, predictedScreen))
+            bestScreen = predictedScreen;
+    }
+    prevTargetPos3D = targetPos;
+
     // Proportional control: smooth approach, no oscillation
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
@@ -557,7 +568,7 @@ void RunAimbot()
 
     // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
     // This naturally slows down as it approaches the target, preventing overshoot.
-    float floorDeflect = 0.18f;                       // always move a bit so small errors get corrected
+    float floorDeflect = 0.08f;                       // minimal nudge to correct small errors
     float farDist = 120.0f;                           // distance at which we hit max stick deflection
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
@@ -951,7 +962,7 @@ void CollectESPData(ESPFrame& frame)
 
     // Collect all players within maxDistance, then keep the closest ones.
     // This ensures nearby enemies always get ESP even in 100-player lobbies.
-    const int MAX_RENDER_PLAYERS = 25;
+    const int MAX_RENDER_PLAYERS = 40;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
     for (int i = 0; i < playerCount; i++) {
@@ -1008,12 +1019,24 @@ void ESPThreadFunc()
 FMatrix GetCurrentViewProj()
 {
     if (!g_targetPID) return g_frames[g_renderFrameIdx].viewProj;
-    uint64_t uworld = GetUWorld();
-    if (!uworld) return g_frames[g_renderFrameIdx].viewProj;
-    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
-    int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
-    if (!viewArrayData || viewArrayCount <= 0) return g_frames[g_renderFrameIdx].viewProj;
-    FMatrix mat = Read<FMatrix>(viewArrayData + 256);
+
+    static uint64_t cachedUWorld = 0;
+    static uint64_t cachedViewArrayData = 0;
+    static int refreshCounter = 0;
+
+    if (++refreshCounter >= 30 || !cachedUWorld) {
+        refreshCounter = 0;
+        cachedUWorld = GetUWorld();
+        if (!cachedUWorld) return g_frames[g_renderFrameIdx].viewProj;
+        cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
+    }
+
+    if (!cachedViewArrayData) {
+        cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
+        if (!cachedViewArrayData) return g_frames[g_renderFrameIdx].viewProj;
+    }
+
+    FMatrix mat = Read<FMatrix>(cachedViewArrayData + 256);
     if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
     return mat;
 }
