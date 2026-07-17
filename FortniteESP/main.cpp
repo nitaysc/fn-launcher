@@ -511,8 +511,7 @@ void RunAimbot()
     }
     lockedPawn = bestPawn;
 
-    // High-gain P-controller with heavy smoothing: strong signal, dampened response.
-    // No floor — near-center force scales naturally to zero, preventing oscillation.
+    // v1.22 adaptive P-controller: fast far, gentle close. No floor.
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
@@ -528,7 +527,7 @@ void RunAimbot()
         return;
     }
 
-    float farDist = 80.0f;
+    float farDist = 120.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
@@ -537,8 +536,14 @@ void RunAimbot()
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    // Heavy smoothing prevents overshoot (strong signal + dampened response = stable fast lock)
-    float alpha = 0.22f + g_aim.smooth * 0.20f;
+    // Adaptive smoothing: less smoothing when far (close gap fast),
+    // more smoothing when close (settle gently, no overshoot)
+    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
+    float alphaFar = 0.78f + g_aim.smooth * 0.10f;
+    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
+    if (alphaT < 0.0f) alphaT = 0.0f;
+    if (alphaT > 1.0f) alphaT = 1.0f;
+    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
@@ -976,7 +981,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
