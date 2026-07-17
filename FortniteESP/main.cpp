@@ -44,6 +44,8 @@ static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
 
 static int g_screenWidth = 0;
 static int g_screenHeight = 0;
+static int g_renderWidth = 0;
+static int g_renderHeight = 0;
 
 // ============================================================
 // Types
@@ -289,8 +291,8 @@ bool WorldToScreen(FVec3 world, FVec2& screen)
     if (w <= 0.0) return false;
 
     double rhw = 1.0 / w;
-    screen.x = (float)((x * rhw + 1.0) * 0.5 * g_screenWidth);
-    screen.y = (float)((1.0 - y * rhw) * 0.5 * g_screenHeight);
+    screen.x = (float)((x * rhw + 1.0) * 0.5 * g_renderWidth);
+    screen.y = (float)((1.0 - y * rhw) * 0.5 * g_renderHeight);
 
     return true;
 }
@@ -413,8 +415,8 @@ FRotator SmoothRot(FRotator current, FRotator target, float smoothFactor)
 
 float ScreenDistToCrosshair(FVec2 screenPos)
 {
-    float cx = (float)g_screenWidth * 0.5f;
-    float cy = (float)g_screenHeight * 0.5f;
+    float cx = (float)g_renderWidth * 0.5f;
+    float cy = (float)g_renderHeight * 0.5f;
     float dx = screenPos.x - cx;
     float dy = screenPos.y - cy;
     return sqrtf(dx * dx + dy * dy);
@@ -463,7 +465,7 @@ void RunAimbot()
 
     if ((rand() % 1000) < (int)(g_aim.randomSkip * 1000.0f)) return;
 
-    float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
+    float fovRadius = g_aim.fov * (g_renderWidth / 90.0f);
     float bestDist = fovRadius;
     uint64_t bestPawn = 0;
     FVec2 bestScreen = {};
@@ -566,8 +568,8 @@ void RunAimbot()
     bestScreen = screen;
 
     // v1.0 proven math: power curve with floor, close-range caps, light smoothing
-    float cx = g_screenWidth * 0.5f;
-    float cy = g_screenHeight * 0.5f;
+    float cx = g_renderWidth * 0.5f;
+    float cy = g_renderHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
@@ -1131,8 +1133,8 @@ void RenderESP()
 
             // Cull players whose box is completely off-screen (with small margin)
             const float margin = 100.0f;
-            bool onScreen = !(maxX < -margin || minX > g_screenWidth + margin ||
-                              maxY < -margin || minY > g_screenHeight + margin);
+            bool onScreen = !(maxX < -margin || minX > g_renderWidth + margin ||
+                              maxY < -margin || minY > g_renderHeight + margin);
 
             if (onScreen && g_settings.showBox) {
                 switch (g_settings.boxStyle) {
@@ -1206,7 +1208,7 @@ void RenderESP()
         if (g_settings.showSnapline) {
             FVec2 sp;
             if (WorldToScreen(pd.position, sp))
-                draw->AddLine({(float)(g_screenWidth/2), (float)g_screenHeight}, {sp.x, sp.y}, color, 1.0f);
+                draw->AddLine({(float)(g_renderWidth/2), (float)g_renderHeight}, {sp.x, sp.y}, color, 1.0f);
         }
     }
 
@@ -1478,7 +1480,9 @@ int main()
 
     g_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     g_screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    printf("[+] Screen: %dx%d\n", g_screenWidth, g_screenHeight);
+    g_renderWidth  = g_screenWidth / 2;
+    g_renderHeight = g_screenHeight / 2;
+    printf("[+] Screen: %dx%d (render: %dx%d)\n", g_screenWidth, g_screenHeight, g_renderWidth, g_renderHeight);
 
     g_driverReady = InitializeDriver();
     if (!g_driverReady) {
@@ -1574,6 +1578,10 @@ int main()
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+        // Scale mouse from window (full res) to render buffer (half res)
+        ImGuiIO& io = ImGui::GetIO();
+        io.MousePos.x *= (float)g_renderWidth / g_screenWidth;
+        io.MousePos.y *= (float)g_renderHeight / g_screenHeight;
 
         g_renderFrameIdx = g_readIdx.load();
         if (showMenu) RenderMenu();
@@ -1619,6 +1627,8 @@ bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 3;
+    sd.BufferDesc.Width = g_renderWidth;
+    sd.BufferDesc.Height = g_renderHeight;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferDesc.RefreshRate = { 60, 1 };
     sd.Flags = 0;
