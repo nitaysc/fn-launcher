@@ -135,6 +135,7 @@ struct AimbotSettings {
     float stickDeadzone = 0.06f;    // deadzone fraction (0.0-0.2)
     int aimToggleKey = 0x50;        // 'P' key to toggle aimbot master switch
     bool masterEnabled = true;      // toggled by aimToggleKey
+    float fovCircleColor[4] = { 1.0f, 1.0f, 1.0f, 0.3f };
 } g_aim;
 
 ViGEmManager g_vigem;
@@ -1245,8 +1246,12 @@ void RenderESP()
     // FOV circle
     if (g_aim.enabled && g_aim.masterEnabled) {
         float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
+        float fovAlpha = g_aim.fovCircleColor[3];
+        ImU32 fovCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
+            g_aim.fovCircleColor[0], g_aim.fovCircleColor[1],
+            g_aim.fovCircleColor[2], fovAlpha));
         ImVec2 center(g_screenWidth * 0.5f, g_screenHeight * 0.5f);
-        draw->AddCircle(center, fovRadius, IM_COL32(255, 255, 255, 40), 64, 1.5f);
+        draw->AddCircle(center, fovRadius, fovCol, 64, 1.5f);
     }
 }
 
@@ -1487,6 +1492,8 @@ void RenderMenu()
             ImGui::Checkbox("Aim at Teammates", &g_aim.aimAtTeam);
             if (g_vigem.IsReady()) ImGui::TextColored(ImVec4(0,1,0,1), "ViGEm: Connected");
             else ImGui::TextColored(ImVec4(1,0,0,1), "ViGEm: Not Connected");
+            ImGui::Spacing();
+            ImGui::ColorEdit4("FOV Circle Color", g_aim.fovCircleColor, ImGuiColorEditFlags_NoInputs);
             ImGui::EndTabItem();
         }
 
