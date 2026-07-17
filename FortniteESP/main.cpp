@@ -542,7 +542,7 @@ void RunAimbot()
     static FVec3 prevTargetPos3D = { 0,0,0 };
     if (prevTargetPos3D.x != 0 || prevTargetPos3D.y != 0 || prevTargetPos3D.z != 0) {
         FVec3 vel = { targetPos.x - prevTargetPos3D.x, targetPos.y - prevTargetPos3D.y, targetPos.z - prevTargetPos3D.z };
-        FVec3 predicted = { targetPos.x + vel.x * 0.4f, targetPos.y + vel.y * 0.4f, targetPos.z + vel.z * 0.4f };
+        FVec3 predicted = { targetPos.x + vel.x * 0.6f, targetPos.y + vel.y * 0.6f, targetPos.z + vel.z * 0.6f };
         FVec2 predictedScreen;
         if (WorldToScreen(predicted, predictedScreen))
             bestScreen = predictedScreen;
@@ -557,7 +557,7 @@ void RunAimbot()
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
     // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
-    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
+    float deadzonePx = 1.0f + g_aim.smooth * 5.0f;  // 1.05px (OP) .. 3.5px (smooth)
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -576,8 +576,8 @@ void RunAimbot()
     float targetDeflect = floorDeflect + (g_aim.stickSensitivity - floorDeflect) * t;
 
     // Small hard cap very close to target to kill any residual oscillation
-    if (pixelDist < 8.0f && targetDeflect > 0.35f)
-        targetDeflect = 0.35f;
+    if (pixelDist < 8.0f && targetDeflect > 0.25f)
+        targetDeflect = 0.25f;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
@@ -1009,7 +1009,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
 }
 
@@ -1517,6 +1517,7 @@ int main()
 
     g_espThreadRunning = true;
     g_espThread = std::thread(ESPThreadFunc);
+    SetThreadPriority(g_espThread.native_handle(), THREAD_PRIORITY_LOWEST);
 
     bool done = false;
     bool showMenu = true;
@@ -1590,13 +1591,13 @@ bool CreateDeviceD3D(HWND hWnd)
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate = { 60, 1 };
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferDesc.RefreshRate = { 0, 1 };
+    sd.Flags = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
     sd.SampleDesc.Count = 1;
     sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     D3D_FEATURE_LEVEL fl;
     const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
     if (D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
