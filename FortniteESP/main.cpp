@@ -480,7 +480,7 @@ void RunAimbot()
         bool hasPos = false;
         if (cp.pd.hasBones) {
             tPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-            tPos.z += 6.0;
+            tPos.z += 10.0;
             hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) {
@@ -533,7 +533,7 @@ void RunAimbot()
     bool hasPos = false;
     if (bestCp->pd.hasBones) {
         targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
-        targetPos.z += 6.0;
+        targetPos.z += 10.0;
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos && bestCp->pd.hasBones) {
@@ -603,20 +603,18 @@ void RunAimbot()
 
     float alpha = 0.30f + g_aim.smooth * 0.40f;
     if (pixelDist < 25.0f) alpha *= 0.45f;
-    // Detect camera movement: if target screen pos jumped significantly,
-    // the camera is moving fast — kill all aimbot momentum to prevent jitter
-    static FVec2 lastScreen = { 0, 0 };
-    static bool lastScreenValid = false;
-    if (lastScreenValid) {
-        float jump = sqrtf((bestScreen.x - lastScreen.x) * (bestScreen.x - lastScreen.x) +
-                           (bestScreen.y - lastScreen.y) * (bestScreen.y - lastScreen.y));
-        if (jump > 12.0f) {
-            prevNX = 0.0f; prevNY = 0.0f;  // kill momentum
-            alpha = 0.05f;                  // nearly zero response this frame
-        }
+
+    // Camera flick detection: when same pawn's screen pos jumps >15px (camera moved fast),
+    // kill all momentum to prevent wild jitter
+    static FVec2 lastScreenPos = { 0, 0 };
+    static uint64_t lastScreenPawn = 0;
+    if (lockedPawn == lastScreenPawn) {
+        float sj = sqrtf((bestScreen.x - lastScreenPos.x) * (bestScreen.x - lastScreenPos.x) +
+                         (bestScreen.y - lastScreenPos.y) * (bestScreen.y - lastScreenPos.y));
+        if (sj > 15.0f) { prevNX = 0.0f; prevNY = 0.0f; alpha = 0.05f; }
     }
-    lastScreen = bestScreen;
-    lastScreenValid = true;
+    lastScreenPos = bestScreen;
+    lastScreenPawn = lockedPawn;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
