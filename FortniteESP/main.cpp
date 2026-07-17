@@ -557,7 +557,7 @@ void RunAimbot()
 
     // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
     // This naturally slows down as it approaches the target, preventing overshoot.
-    float floorDeflect = 0.18f;                       // always move a bit so small errors get corrected
+    float floorDeflect = 0.12f;                       // minimal nudge so tiny errors get corrected
     float farDist = 120.0f;                           // distance at which we hit max stick deflection
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
@@ -574,7 +574,7 @@ void RunAimbot()
     // Adaptive output smoothing: less inertia when far (prevents overshoot),
     // more inertia when close (keeps it smooth).
     float alphaClose = 0.55f + g_aim.smooth * 0.20f;
-    float alphaFar   = 0.78f + g_aim.smooth * 0.10f;
+    float alphaFar   = 0.60f + g_aim.smooth * 0.10f;
     float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
     if (alphaT < 0.0f) alphaT = 0.0f;
     if (alphaT > 1.0f) alphaT = 1.0f;
@@ -1033,11 +1033,7 @@ void RenderESP()
 
     // Use the CURRENT camera matrix so ESP doesn't lag behind when the player moves the mouse.
     // Throttle the live read to every 2nd frame to reduce driver overhead on low-end PCs.
-    static int viewUpdateFrame = 0;
-    if (++viewUpdateFrame >= 2) {
-        viewUpdateFrame = 0;
-        g_viewProjectionMatrix = GetCurrentViewProj();
-    }
+    g_viewProjectionMatrix = GetCurrentViewProj();
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
