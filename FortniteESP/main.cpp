@@ -928,10 +928,12 @@ void CollectESPData(ESPFrame& frame)
         }
     }
 
-    int limit = playerCount < 48 ? playerCount : 48;
-    frame.players.reserve(limit);
+    // Collect all players within maxDistance, then keep the closest ones.
+    // This ensures nearby enemies always get ESP even in 100-player lobbies.
+    const int MAX_RENDER_PLAYERS = 64;
+    frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
-    for (int i = 0; i < limit; i++) {
+    for (int i = 0; i < playerCount; i++) {
         uint64_t playerState = Read<uint64_t>(playerArrayData + i * 8);
         if (!playerState) continue;
 
@@ -958,6 +960,15 @@ void CollectESPData(ESPFrame& frame)
         cp.valid = true;
         frame.players.push_back(cp);
     }
+
+    // Sort by distance so the closest threats always have ESP when player count exceeds cap
+    std::sort(frame.players.begin(), frame.players.end(),
+        [](const CachedPlayer& a, const CachedPlayer& b) {
+            return a.pd.distance < b.pd.distance;
+        });
+    if ((int)frame.players.size() > MAX_RENDER_PLAYERS)
+        frame.players.resize(MAX_RENDER_PLAYERS);
+
     frame.hasData = true;
 }
 
