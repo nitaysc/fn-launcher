@@ -509,16 +509,14 @@ void RunAimbot()
     }
     lockedPawn = bestPawn;
 
-    // P-controller: deflection proportional to on-screen distance (no floor).
-    // No minimum deflection — when target is near center, output is near zero,
-    // preventing the aimbot from fighting the user's mouse movement.
+    // P-controller with small floor — strong enough to track but not fight mouse
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
-    float deadzonePx = 3.0f + g_aim.smooth * 15.0f;
+    float deadzonePx = 2.0f + g_aim.smooth * 10.0f;
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -527,18 +525,18 @@ void RunAimbot()
         return;
     }
 
-    float farDist = 250.0f;
+    float floorDeflect = 0.08f;
+    float farDist = 150.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float targetDeflect = t * g_aim.stickSensitivity;
+    float targetDeflect = (floorDeflect + (1.0f - floorDeflect) * t) * g_aim.stickSensitivity;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    // Heavy output smoothing to prevent oscillation when user is moving mouse
-    float alphaClose = 0.25f + g_aim.smooth * 0.20f;
-    float alphaFar = 0.50f + g_aim.smooth * 0.10f;
+    float alphaClose = 0.40f + g_aim.smooth * 0.20f;
+    float alphaFar = 0.65f + g_aim.smooth * 0.10f;
     float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
     if (alphaT < 0.0f) alphaT = 0.0f;
     if (alphaT > 1.0f) alphaT = 1.0f;
