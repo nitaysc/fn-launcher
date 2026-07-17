@@ -551,33 +551,33 @@ void RunAimbot()
         return;
     }
 
-    // Gentler power curve for smooth mid/far tracking.
-    // Starts at a small floor so the stick always registers, rises smoothly to sensitivity.
-    float exponent = 0.45f + g_aim.smooth * 1.2f;
-    float farDist = 160.0f;
+    // Power curve for fast lock and stable tracking.
+    // Higher floor for quicker initial movement, lower exponent for faster ramp-up.
+    float exponent = 0.35f + g_aim.smooth * 0.9f;
+    float farDist = 130.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float deflection = (0.12f + 0.88f * pow(t, exponent)) * g_aim.stickSensitivity;
+    float deflection = (0.20f + 0.80f * pow(t, exponent)) * g_aim.stickSensitivity;
 
-    // Cap close-range force to prevent oscillation (max 40% within 10px)
-    if (pixelDist < 10.0f && deflection > 0.40f)
-        deflection = 0.40f;
+    // Cap close-range force to prevent oscillation (max 45% within 10px)
+    if (pixelDist < 10.0f && deflection > 0.45f)
+        deflection = 0.45f;
 
     // Distance-based soft cap: as target gets closer on-screen, lower max force.
     // This stops side-to-side overshoot at low smoothness while still allowing far snaps.
-    float closeRange = 50.0f;
+    float closeRange = 35.0f;
     if (pixelDist < closeRange) {
-        float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
+        float maxClose = 0.30f + (g_aim.stickSensitivity - 0.30f) * (pixelDist / closeRange);
         if (deflection > maxClose) deflection = maxClose;
     }
 
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
 
-    // Light output smoothing to kill ESP-jitter follow
-    float alpha = 0.38f + g_aim.smooth * 0.40f;
-    if (pixelDist < 25.0f) alpha *= 0.55f; // smoother when very close
+    // Moderate output smoothing: faster settling than before, but still filters jitter
+    float alpha = 0.50f + g_aim.smooth * 0.25f;
+    if (pixelDist < 25.0f) alpha *= 0.75f; // slight extra smoothness when very close
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
