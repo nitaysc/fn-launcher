@@ -597,24 +597,27 @@ void RunAimbot()
         float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
         if (deflection > maxClose) deflection = maxClose;
     }
+    // Cap deflection for far targets (prevents stick slamming when camera moves fast)
+    if (pixelDist > 80.0f && deflection > 0.30f)
+        deflection = 0.30f;
 
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
 
-    float alpha = 0.30f + g_aim.smooth * 0.40f;
-    if (pixelDist < 25.0f) alpha *= 0.45f;
+    // Rate-limit target direction changes (prevents jitter when camera moves fast)
+    static float prevTargetNX = 0.0f, prevTargetNY = 0.0f;
+    float maxDirChange = 0.20f;
+    float dtnx = targetNX - prevTargetNX;
+    if (dtnx > maxDirChange)  targetNX = prevTargetNX + maxDirChange;
+    if (dtnx < -maxDirChange) targetNX = prevTargetNX - maxDirChange;
+    float dtny = targetNY - prevTargetNY;
+    if (dtny > maxDirChange)  targetNY = prevTargetNY + maxDirChange;
+    if (dtny < -maxDirChange) targetNY = prevTargetNY - maxDirChange;
+    prevTargetNX = targetNX;
+    prevTargetNY = targetNY;
 
-    // Camera flick detection: when same pawn's screen pos jumps >15px (camera moved fast),
-    // kill all momentum to prevent wild jitter
-    static FVec2 lastScreenPos = { 0, 0 };
-    static uint64_t lastScreenPawn = 0;
-    if (lockedPawn == lastScreenPawn) {
-        float sj = sqrtf((bestScreen.x - lastScreenPos.x) * (bestScreen.x - lastScreenPos.x) +
-                         (bestScreen.y - lastScreenPos.y) * (bestScreen.y - lastScreenPos.y));
-        if (sj > 15.0f) { prevNX = 0.0f; prevNY = 0.0f; alpha = 0.05f; }
-    }
-    lastScreenPos = bestScreen;
-    lastScreenPawn = lockedPawn;
+    float alpha = 0.38f + g_aim.smooth * 0.40f;
+    if (pixelDist < 25.0f) alpha *= 0.55f;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
