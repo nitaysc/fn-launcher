@@ -509,14 +509,16 @@ void RunAimbot()
     }
     lockedPawn = bestPawn;
 
-    // v1.22 linear P-controller: deflection proportional to on-screen distance.
+    // P-controller: deflection proportional to on-screen distance (no floor).
+    // No minimum deflection — when target is near center, output is near zero,
+    // preventing the aimbot from fighting the user's mouse movement.
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
-    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;
+    float deadzonePx = 3.0f + g_aim.smooth * 15.0f;
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -525,21 +527,18 @@ void RunAimbot()
         return;
     }
 
-    // v1.22 linear P-controller
-    float floorDeflect = 0.18f;
-    float farDist = 120.0f;
+    float farDist = 250.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
-    float targetDeflect = floorDeflect + (1.0f - floorDeflect) * t;
-    if (targetDeflect > 1.0f) targetDeflect = 1.0f;
-    if (pixelDist < 10.0f) targetDeflect = 0.35f;
+    if (t > 1.0f) t = 1.0f;
+    float targetDeflect = t * g_aim.stickSensitivity;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    // v1.22 adaptive output smoothing: more smoothing close, less far
-    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
-    float alphaFar = 0.78f + g_aim.smooth * 0.10f;
+    // Heavy output smoothing to prevent oscillation when user is moving mouse
+    float alphaClose = 0.25f + g_aim.smooth * 0.20f;
+    float alphaFar = 0.50f + g_aim.smooth * 0.10f;
     float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
     if (alphaT < 0.0f) alphaT = 0.0f;
     if (alphaT > 1.0f) alphaT = 1.0f;
