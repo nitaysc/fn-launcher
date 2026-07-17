@@ -145,6 +145,7 @@ struct ScreenBone { FVec2 s; bool visible; };
 
 struct CachedPlayer {
     PlayerData pd;
+    uint64_t pawn = 0;
     ScreenBone screenBones[16];
     FVec2 screenBase;
     bool screenBaseValid;
@@ -455,12 +456,11 @@ void RunAimbot()
     // FOV radius in pixels (matches the visual FOV circle)
     float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
     float bestDist = fovRadius;
-    int bestIdx = -1;
+    uint64_t bestPawn = 0;
     FVec2 bestScreen = {};
 
     // Target stickiness: prefer current target unless another is 40% closer
-    static int lockedIdx = -1;
-    if (lockedIdx >= (int)frame.players.size()) lockedIdx = -1;
+    static uint64_t lockedPawn = 0;
 
     for (size_t i = 0; i < frame.players.size(); i++) {
         const CachedPlayer& cp = frame.players[i];
@@ -491,40 +491,44 @@ void RunAimbot()
 
         float screenDist = ScreenDistToCrosshair(screen);
         // Bias toward locked target (40% advantage = new target must be 40% closer to steal)
-        if ((int)i == lockedIdx) screenDist *= 0.6f;
+        if (cp.pawn == lockedPawn) screenDist *= 0.6f;
         if (screenDist < bestDist) {
             bestDist = screenDist;
-            bestIdx = (int)i;
+            bestPawn = cp.pawn;
             bestScreen = screen;
         }
     }
 
-    if (bestIdx < 0) {
-        lockedIdx = -1;
+    if (!bestPawn) {
+        lockedPawn = 0;
         XUSB_REPORT report = {};
         g_vigem.Update(report);
         prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
         return;
     }
-    if (lockedIdx != bestIdx) {
+    if (lockedPawn != bestPawn) {
         prevNX = 0.0f; prevNY = 0.0f;
     }
-    lockedIdx = bestIdx;
+    lockedPawn = bestPawn;
 
-    // Use the locked target's cached position directly — no prediction.
-    const CachedPlayer& bestCp = frame.players[bestIdx];
+    // Find the locked target in the current frame (robust against sorting)
+    const CachedPlayer* bestCp = nullptr;
+    for (const auto& cp : frame.players) {
+        if (cp.pawn == bestPawn && cp.valid) { bestCp = &cp; break; }
+    }
+    if (!bestCp) return;
     FVec3 targetPos;
     bool hasPos = false;
-    if (bestCp.pd.hasBones) {
-        targetPos = bestCp.pd.bones[offsets::aimbot::BONE_HEAD];
+    if (bestCp->pd.hasBones) {
+        targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
-    if (!hasPos && bestCp.pd.hasBones) {
-        targetPos = bestCp.pd.bones[offsets::aimbot::BONE_CHEST];
+    if (!hasPos && bestCp->pd.hasBones) {
+        targetPos = bestCp->pd.bones[offsets::aimbot::BONE_CHEST];
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos) {
-        targetPos = bestCp.pd.position;
+        targetPos = bestCp->pd.position;
         targetPos.z += 170.0; // approximate head height when no bones
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
@@ -960,9 +964,6 @@ void CollectESPData(ESPFrame& frame)
         uint64_t pawn = Read<uint64_t>(playerState + offsets::player::PawnPrivate);
         if (!pawn || pawn == localPawn) continue;
 
-        uint8_t dyingByte = Read<uint8_t>(pawn + offsets::player::bIsDying);
-        if (dyingByte & 0x20) continue;
-
         // Quick distance check before expensive read
         FVec3 pos = GetPawnPosition(pawn);
         if (pos.x == 0.0 && pos.y == 0.0 && pos.z == 0.0) continue;
@@ -975,6 +976,7 @@ void CollectESPData(ESPFrame& frame)
 
         CachedPlayer cp = {};
         cp.pd = pd;
+        cp.pawn = pawn;
         cp.valid = true;
         frame.players.push_back(cp);
     }
