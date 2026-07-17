@@ -433,9 +433,6 @@ void RunAimbot()
 
     static bool keyHeld = false;
     static float prevNX = 0.0f, prevNY = 0.0f;
-    static uint64_t prevLockedPawn = 0;
-    static FVec3 prevTargetPos = { 0.0, 0.0, 0.0 };
-    static bool prevTargetValid = false;
     bool keyDown = (GetAsyncKeyState(g_aim.aimKey) & 0x8000) != 0;
     if (!keyDown) {
         if (keyHeld) {
@@ -444,14 +441,11 @@ void RunAimbot()
             keyHeld = false;
         }
         prevNX = 0.0f; prevNY = 0.0f;
-        prevLockedPawn = 0;
-        prevTargetValid = false;
         return;
     }
     if (!keyHeld) {
         keyHeld = true;
         prevNX = 0.0f; prevNY = 0.0f;
-        prevTargetValid = false;
     }
 
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
@@ -459,11 +453,13 @@ void RunAimbot()
 
     if ((rand() % 1000) < (int)(g_aim.randomSkip * 1000.0f)) return;
 
+    // FOV radius in pixels (matches the visual FOV circle)
     float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
     float bestDist = fovRadius;
     uint64_t bestPawn = 0;
     FVec2 bestScreen = {};
 
+    // Target stickiness: prefer current target unless another is 40% closer
     static uint64_t lockedPawn = 0;
 
     for (size_t i = 0; i < frame.players.size(); i++) {
@@ -471,30 +467,30 @@ void RunAimbot()
         if (!cp.valid) continue;
         if (!g_aim.aimAtTeam && cp.pd.teamIndex == frame.localTeam && frame.localTeam != 0) continue;
 
-        FVec3 tPos;
+        FVec3 targetPos;
         bool hasPos = false;
         if (cp.pd.hasBones) {
-            tPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-            tPos.z += 10.0;
-            hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
+            targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
+            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
         }
         if (!hasPos) {
             if (cp.pd.hasBones) {
-                tPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
-                hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
+                targetPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
+                hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
             }
         }
         if (!hasPos) {
-            tPos = cp.pd.position;
-            tPos.z += 170.0;
-            hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
+            targetPos = cp.pd.position;
+            targetPos.z += 170.0; // approximate head height when no bones
+            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
         }
         if (!hasPos) continue;
 
         FVec2 screen;
-        if (!WorldToScreen(tPos, screen)) continue;
+        if (!WorldToScreen(targetPos, screen)) continue;
 
         float screenDist = ScreenDistToCrosshair(screen);
+        // Bias toward locked target (40% advantage = new target must be 40% closer to steal)
         if (cp.pawn == lockedPawn) screenDist *= 0.6f;
         if (screenDist < bestDist) {
             bestDist = screenDist;
@@ -508,27 +504,23 @@ void RunAimbot()
         XUSB_REPORT report = {};
         g_vigem.Update(report);
         prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
-        prevTargetValid = false;
         return;
     }
     if (lockedPawn != bestPawn) {
         prevNX = 0.0f; prevNY = 0.0f;
-        prevTargetValid = false;
     }
     lockedPawn = bestPawn;
 
-    // Recompute target world position and predict ahead (~30ms)
+    // Find the locked target in the current frame (robust against sorting)
     const CachedPlayer* bestCp = nullptr;
     for (const auto& cp : frame.players) {
         if (cp.pawn == bestPawn && cp.valid) { bestCp = &cp; break; }
     }
     if (!bestCp) return;
-
     FVec3 targetPos;
     bool hasPos = false;
     if (bestCp->pd.hasBones) {
         targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
-        targetPos.z += 10.0;
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos && bestCp->pd.hasBones) {
@@ -537,39 +529,24 @@ void RunAimbot()
     }
     if (!hasPos) {
         targetPos = bestCp->pd.position;
-        targetPos.z += 170.0;
+        targetPos.z += 170.0; // approximate head height when no bones
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos) return;
 
-    FVec3 aimPos = targetPos;
-    if (prevTargetValid && lockedPawn == prevLockedPawn) {
-        FVec3 velocity = {
-            targetPos.x - prevTargetPos.x,
-            targetPos.y - prevTargetPos.y,
-            targetPos.z - prevTargetPos.z
-        };
-        // Predict ~30ms ahead to compensate for data thread latency
-        aimPos.x += velocity.x * 1.0;
-        aimPos.y += velocity.y * 1.0;
-        aimPos.z += velocity.z * 1.0;
-    }
-    prevLockedPawn = lockedPawn;
-    prevTargetPos = targetPos;
-    prevTargetValid = true;
-
     FVec2 screen;
-    if (!WorldToScreen(aimPos, screen)) return;
+    if (!WorldToScreen(targetPos, screen)) return;
     bestScreen = screen;
 
-    // v1.0 proven math: power curve with floor, close-range caps, light smoothing
+    // Proportional control: smooth approach, no oscillation
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
-    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;
+    // Smooth slider controls aggression (0.01 = OP snap, 0.50 = gentle smooth)
+    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;  // 0.55px (OP) .. 3.0px (smooth)
     if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
@@ -578,27 +555,31 @@ void RunAimbot()
         return;
     }
 
-    float exponent = 0.45f + g_aim.smooth * 1.2f;
-    float farDist = 160.0f;
+    // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
+    // This naturally slows down as it approaches the target, preventing overshoot.
+    float floorDeflect = 0.18f;                       // always move a bit so small errors get corrected
+    float farDist = 120.0f;                           // distance at which we hit max stick deflection
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float deflection = (0.05f + 0.95f * pow(t, exponent)) * g_aim.stickSensitivity;
+    float targetDeflect = floorDeflect + (g_aim.stickSensitivity - floorDeflect) * t;
 
-    if (pixelDist < 10.0f && deflection > 0.40f)
-        deflection = 0.40f;
+    // Small hard cap very close to target to kill any residual oscillation
+    if (pixelDist < 8.0f && targetDeflect > 0.35f)
+        targetDeflect = 0.35f;
 
-    float closeRange = 50.0f;
-    if (pixelDist < closeRange) {
-        float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
-        if (deflection > maxClose) deflection = maxClose;
-    }
+    float targetNX = (dx / pixelDist) * targetDeflect;
+    float targetNY = (dy / pixelDist) * targetDeflect;
 
-    float targetNX = (dx / pixelDist) * deflection;
-    float targetNY = (dy / pixelDist) * deflection;
+    // Adaptive output smoothing: less inertia when far (prevents overshoot),
+    // more inertia when close (keeps it smooth).
+    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
+    float alphaFar   = 0.78f + g_aim.smooth * 0.10f;
+    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
+    if (alphaT < 0.0f) alphaT = 0.0f;
+    if (alphaT > 1.0f) alphaT = 1.0f;
+    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
 
-    float alpha = 0.38f + g_aim.smooth * 0.40f;
-    if (pixelDist < 25.0f) alpha *= 0.55f;
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
@@ -836,27 +817,12 @@ FVec3 GetActorPosition(uint64_t actor)
     return Read<FVec3>(rootComp + offsets::core::RelativeLocation);
 }
 
-static uint64_t GetCurrentVehicle(uint64_t pawn)
-{
-    if (!pawn) return 0;
-    // Try a few common CurrentVehicle offsets; different vehicles/updates may use different ones.
-    uint64_t offsetsToTry[] = { offsets::player::CurrentVehicle, 0x2A98, 0x2B00, 0x2B50 };
-    for (auto off : offsetsToTry) {
-        uint64_t vehicle = Read<uint64_t>(pawn + off);
-        if (vehicle && vehicle != 0xFFFFFFFFFFFFFFFF) return vehicle;
-    }
-    return 0;
-}
-
 FVec3 GetPawnPosition(uint64_t pawn)
 {
     FVec3 pos = GetActorPosition(pawn);
     if (pos.x != 0.0 || pos.y != 0.0 || pos.z != 0.0) return pos;
-    // ReplicatedMovement fallback (Actor+0xD0, FRepMovement.Location at +0x30)
-    FVec3 repPos = Read<FVec3>(pawn + 0x100);
-    if (repPos.x != 0.0 || repPos.y != 0.0 || repPos.z != 0.0) return repPos;
     // Player may be in a vehicle; try the vehicle position
-    uint64_t vehicle = GetCurrentVehicle(pawn);
+    uint64_t vehicle = Read<uint64_t>(pawn + offsets::player::CurrentVehicle);
     if (vehicle) return GetActorPosition(vehicle);
     return pos;
 }
@@ -1062,7 +1028,13 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    g_viewProjectionMatrix = GetCurrentViewProj();
+    // Use the CURRENT camera matrix so ESP doesn't lag behind when the player moves the mouse.
+    // Throttle the live read to every 2nd frame to reduce driver overhead on low-end PCs.
+    static int viewUpdateFrame = 0;
+    if (++viewUpdateFrame >= 2) {
+        viewUpdateFrame = 0;
+        g_viewProjectionMatrix = GetCurrentViewProj();
+    }
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
@@ -1544,16 +1516,6 @@ int main()
         }
         if (done) break;
 
-        // Frame limiter: cap overlay at ~60fps for smooth pacing and lower CPU use
-        LARGE_INTEGER now;
-        QueryPerformanceCounter(&now);
-        double elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
-        if (elapsed < (1.0 / 60.0)) {
-            DWORD sleepMs = (DWORD)(((1.0 / 60.0) - elapsed) * 1000.0);
-            if (sleepMs > 1) Sleep(sleepMs - 1);
-        }
-        QueryPerformanceCounter(&lastFrame);
-
         if (GetAsyncKeyState(VK_INSERT) & 1) {
             showMenu = !showMenu;
             LONG style = GetWindowLong(hwnd, GWL_EXSTYLE);
@@ -1576,6 +1538,20 @@ int main()
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         g_pSwapChain->Present(0, 0);
+
+        // Frame limiter: wait until target time reached from last frame
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        double elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
+        if (elapsed < (1.0 / 60.0)) {
+            DWORD sleepMs = (DWORD)(((1.0 / 60.0) - elapsed) * 1000.0);
+            if (sleepMs > 1) Sleep(sleepMs - 1);
+            do {
+                QueryPerformanceCounter(&now);
+                elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
+            } while (elapsed < (1.0 / 60.0));
+        }
+        QueryPerformanceCounter(&lastFrame);
     }
 
     g_espThreadRunning = false;
