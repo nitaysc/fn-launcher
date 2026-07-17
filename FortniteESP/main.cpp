@@ -567,9 +567,15 @@ void RunAimbot()
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    // Output smoothing: higher alpha = faster response, less left-right wobble
-    float alpha = 0.60f + g_aim.smooth * 0.20f;
-    if (pixelDist < 20.0f) alpha *= 0.80f; // tiny bit smoother when already on target
+    // Adaptive output smoothing: less inertia when far (prevents overshoot),
+    // more inertia when close (keeps it smooth).
+    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
+    float alphaFar   = 0.78f + g_aim.smooth * 0.10f;
+    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
+    if (alphaT < 0.0f) alphaT = 0.0f;
+    if (alphaT > 1.0f) alphaT = 1.0f;
+    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
+
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
