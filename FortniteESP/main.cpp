@@ -471,6 +471,7 @@ void RunAimbot()
         bool hasPos = false;
         if (cp.pd.hasBones) {
             targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
+            targetPos.z += 10.0; // top of head, not neck
             hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
         }
         if (!hasPos) {
@@ -521,6 +522,7 @@ void RunAimbot()
     bool hasPos = false;
     if (bestCp->pd.hasBones) {
         targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
+        targetPos.z += 10.0; // top of head, not neck
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos && bestCp->pd.hasBones) {
