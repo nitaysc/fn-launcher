@@ -424,7 +424,7 @@ float ScreenDistToCrosshair(FVec2 screenPos)
 
 void RunAimbot()
 {
-    if (!g_aim.enabled || !g_aim.masterEnabled || !g_driverReady || !g_targetPID) return;
+    if (!g_aim.enabled || !g_driverReady || !g_targetPID) return;
     if (!g_vigem.IsReady()) return;
 
     static bool togglePrev = false;
