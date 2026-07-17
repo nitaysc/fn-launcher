@@ -970,8 +970,10 @@ void CollectESPData(ESPFrame& frame)
 
     uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
     int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
-    if (!viewArrayData || viewArrayCount <= 0) return;
-    frame.viewProj = Read<FMatrix>(viewArrayData + 256);
+    if (viewArrayData && viewArrayCount > 0)
+        frame.viewProj = Read<FMatrix>(viewArrayData + 256);
+    else
+        frame.viewProj = {};  // will be read fresh by render thread
 
     FVec3 localPos = {};
     frame.localTeam = 0;
