@@ -538,11 +538,15 @@ void RunAimbot()
     if (!WorldToScreen(targetPos, screen)) return;
     bestScreen = screen;
 
-    // Velocity prediction: track target movement to compensate for data latency
+    // Velocity prediction with EMA smoothing to prevent jitter
     static FVec3 prevTargetPos3D = { 0,0,0 };
+    static FVec3 smoothedVel = { 0,0,0 };
     if (prevTargetPos3D.x != 0 || prevTargetPos3D.y != 0 || prevTargetPos3D.z != 0) {
-        FVec3 vel = { targetPos.x - prevTargetPos3D.x, targetPos.y - prevTargetPos3D.y, targetPos.z - prevTargetPos3D.z };
-        FVec3 predicted = { targetPos.x + vel.x * 0.6f, targetPos.y + vel.y * 0.6f, targetPos.z + vel.z * 0.6f };
+        FVec3 rawVel = { targetPos.x - prevTargetPos3D.x, targetPos.y - prevTargetPos3D.y, targetPos.z - prevTargetPos3D.z };
+        smoothedVel.x = smoothedVel.x * 0.5f + rawVel.x * 0.5f;
+        smoothedVel.y = smoothedVel.y * 0.5f + rawVel.y * 0.5f;
+        smoothedVel.z = smoothedVel.z * 0.5f + rawVel.z * 0.5f;
+        FVec3 predicted = { targetPos.x + smoothedVel.x * 0.4f, targetPos.y + smoothedVel.y * 0.4f, targetPos.z + smoothedVel.z * 0.4f };
         FVec2 predictedScreen;
         if (WorldToScreen(predicted, predictedScreen))
             bestScreen = predictedScreen;
@@ -965,8 +969,12 @@ void CollectESPData(ESPFrame& frame)
     const int MAX_RENDER_PLAYERS = 40;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
+    // Batch-read all player state pointers in one driver call (saves ~100 Read calls)
+    std::vector<uint64_t> allStates(playerCount);
+    ReadBuffer(playerArrayData, allStates.data(), playerCount * sizeof(uint64_t));
+
     for (int i = 0; i < playerCount; i++) {
-        uint64_t playerState = Read<uint64_t>(playerArrayData + i * 8);
+        uint64_t playerState = allStates[i];
         if (!playerState) continue;
 
         uint64_t pawn = Read<uint64_t>(playerState + offsets::player::PawnPrivate);
