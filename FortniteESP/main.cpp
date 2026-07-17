@@ -480,7 +480,7 @@ void RunAimbot()
         bool hasPos = false;
         if (cp.pd.hasBones) {
             tPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-            tPos.z += 10.0;
+            tPos.z += 6.0;
             hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) {
@@ -533,7 +533,7 @@ void RunAimbot()
     bool hasPos = false;
     if (bestCp->pd.hasBones) {
         targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
-        targetPos.z += 10.0;
+        targetPos.z += 6.0;
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos && bestCp->pd.hasBones) {
@@ -603,6 +603,18 @@ void RunAimbot()
 
     float alpha = 0.30f + g_aim.smooth * 0.40f;
     if (pixelDist < 25.0f) alpha *= 0.45f;
+    // Detect camera movement: if target screen pos jumps >15px in one frame,
+    // the camera is moving fast — heavily dampen aimbot to prevent jitter
+    static FVec2 lastScreen = { 0, 0 };
+    static bool lastScreenValid = false;
+    if (lastScreenValid) {
+        float jump = sqrtf((bestScreen.x - lastScreen.x) * (bestScreen.x - lastScreen.x) +
+                           (bestScreen.y - lastScreen.y) * (bestScreen.y - lastScreen.y));
+        if (jump > 15.0f) alpha *= 0.2f;  // camera shake — 80% less aimbot response
+    }
+    lastScreen = bestScreen;
+    lastScreenValid = true;
+
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
