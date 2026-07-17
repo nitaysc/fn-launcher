@@ -11,6 +11,7 @@
 #include <cmath>
 #include <mutex>
 #include <atomic>
+#include <unordered_map>
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -114,6 +115,7 @@ struct PlayerData {
 
     FVec3 bones[16];
     bool hasBones;
+    FVec3 velocity;  // for ESP prediction
 };
 
 struct AimbotSettings {
@@ -549,9 +551,9 @@ void RunAimbot()
             targetPos.y - prevTargetPos.y,
             targetPos.z - prevTargetPos.z
         };
-        aimPos.x += velocity.x * 1.5f;
-        aimPos.y += velocity.y * 1.5f;
-        aimPos.z += velocity.z * 1.5f;
+        aimPos.x += velocity.x * 0.5f;
+        aimPos.y += velocity.y * 0.5f;
+        aimPos.z += velocity.z * 0.5f;
     }
     prevLockedPawn = lockedPawn;
     prevTargetPos = targetPos;
@@ -975,6 +977,9 @@ void CollectESPData(ESPFrame& frame)
     const int MAX_RENDER_PLAYERS = 40;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
+    // Track previous positions for velocity prediction
+    static std::unordered_map<uint64_t, FVec3> prevPositions;
+
     for (int i = 0; i < playerCount; i++) {
         uint64_t playerState = Read<uint64_t>(playerArrayData + i * 8);
         if (!playerState) continue;
@@ -991,6 +996,23 @@ void CollectESPData(ESPFrame& frame)
 
         PlayerData pd = ReadPlayerDataFor(playerState, pawn, localPos);
         if (pd.position.x == 0.0 && pd.position.y == 0.0 && pd.position.z == 0.0) continue;
+
+        // Compute velocity from previous position
+        auto it = prevPositions.find(pawn);
+        if (it != prevPositions.end()) {
+            pd.velocity.x = pd.position.x - it->second.x;
+            pd.velocity.y = pd.position.y - it->second.y;
+            pd.velocity.z = pd.position.z - it->second.z;
+        }
+        prevPositions[pawn] = pd.position;
+        // Smooth velocity: dampen extreme values to reduce jitter
+        float speed = (float)sqrt(pd.velocity.x * pd.velocity.x + pd.velocity.y * pd.velocity.y + pd.velocity.z * pd.velocity.z);
+        if (speed > 50.0f) {
+            float scale = 50.0f / speed;
+            pd.velocity.x *= scale;
+            pd.velocity.y *= scale;
+            pd.velocity.z *= scale;
+        }
 
         CachedPlayer cp = {};
         cp.pd = pd;
@@ -1065,13 +1087,19 @@ void RenderESP()
 
         float minX = 99999, minY = 99999, maxX = -99999, maxY = -99999;
         int projected = 0;
+
+        // Predict position forward using tracked velocity (compensates for data latency)
+        float predictFactor = 0.5f;
+        FVec3 predOffset = { pd.velocity.x * predictFactor, pd.velocity.y * predictFactor, pd.velocity.z * predictFactor };
+
         if (pd.hasBones) {
             int cornerBones[] = { 0, 3, 4, 7 };
             for (int j = 0; j < 4; j++) {
                 int idx = cornerBones[j];
                 if (pd.bones[idx].x == 0.0 && pd.bones[idx].y == 0.0 && pd.bones[idx].z == 0.0) continue;
+                FVec3 predictedBone = { pd.bones[idx].x + predOffset.x, pd.bones[idx].y + predOffset.y, pd.bones[idx].z + predOffset.z };
                 FVec2 sp;
-                if (WorldToScreen(pd.bones[idx], sp)) {
+                if (WorldToScreen(predictedBone, sp)) {
                     if (sp.x < minX) minX = sp.x;
                     if (sp.y < minY) minY = sp.y;
                     if (sp.x > maxX) maxX = sp.x;
@@ -1081,8 +1109,8 @@ void RenderESP()
             }
         }
         if (projected < 4) {
-            FVec3 headPos = pd.position; headPos.z += 180.0;
-            FVec3 footPos = pd.position; footPos.z -= 15.0;
+            FVec3 headPos = { pd.position.x + predOffset.x, pd.position.y + predOffset.y, pd.position.z + predOffset.z + 180.0 };
+            FVec3 footPos = { pd.position.x + predOffset.x, pd.position.y + predOffset.y, pd.position.z + predOffset.z - 15.0 };
             FVec2 sh, sf;
             if (WorldToScreen(headPos, sh) && WorldToScreen(footPos, sf)) {
                 float bH = sf.y - sh.y;
