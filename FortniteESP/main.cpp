@@ -1239,6 +1239,13 @@ void RenderESP()
         ImU32 localColor = IM_COL32(0, 255, 255, 255);
         DrawSkeleton(draw, frame.localPlayer, localColor);
     }
+
+    // FOV circle
+    if (g_aim.enabled && g_aim.masterEnabled) {
+        float fovRadius = g_aim.fov * (g_screenWidth / 90.0f);
+        ImVec2 center(g_screenWidth * 0.5f, g_screenHeight * 0.5f);
+        draw->AddCircle(center, fovRadius, IM_COL32(255, 255, 255, 40), 64, 1.5f);
+    }
 }
 
 // ============================================================
