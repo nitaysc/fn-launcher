@@ -574,7 +574,7 @@ void RunAimbot()
     if (lockedPawn == lastScreenPawn && lockedPawn != 0) {
         float sj = sqrtf((bestScreen.x - lastScreenPos.x) * (bestScreen.x - lastScreenPos.x) +
                          (bestScreen.y - lastScreenPos.y) * (bestScreen.y - lastScreenPos.y));
-        if (sj > 30.0f) {
+        if (sj > 80.0f) {
             skipCounter++;
             XUSB_REPORT report = {};
             g_vigem.Update(report);
@@ -625,7 +625,7 @@ void RunAimbot()
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
 
-    float alpha = 0.45f + g_aim.smooth * 0.35f;
+    float alpha = 0.55f + g_aim.smooth * 0.35f;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
