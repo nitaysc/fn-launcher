@@ -555,30 +555,31 @@ void RunAimbot()
         return;
     }
 
-    // Linear P-controller for aimbot: deflection is proportional to on-screen distance.
-    // This naturally slows down as it approaches the target, preventing overshoot.
-    float floorDeflect = 0.18f;                       // always move a bit so small errors get corrected
-    float farDist = 120.0f;                           // distance at which we hit max stick deflection
+    // Original v1.0 power curve (proven stable) without prediction.
+    float exponent = 0.45f + g_aim.smooth * 1.2f;
+    float farDist = 160.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float targetDeflect = floorDeflect + (g_aim.stickSensitivity - floorDeflect) * t;
+    float deflection = (0.12f + 0.88f * pow(t, exponent)) * g_aim.stickSensitivity;
 
-    // Small hard cap very close to target to kill any residual oscillation
-    if (pixelDist < 8.0f && targetDeflect > 0.35f)
-        targetDeflect = 0.35f;
+    // Cap close-range force to prevent oscillation (max 40% within 10px)
+    if (pixelDist < 10.0f && deflection > 0.40f)
+        deflection = 0.40f;
 
-    float targetNX = (dx / pixelDist) * targetDeflect;
-    float targetNY = (dy / pixelDist) * targetDeflect;
+    // Distance-based soft cap: as target gets closer on-screen, lower max force.
+    float closeRange = 50.0f;
+    if (pixelDist < closeRange) {
+        float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
+        if (deflection > maxClose) deflection = maxClose;
+    }
 
-    // Adaptive output smoothing: less inertia when far (prevents overshoot),
-    // more inertia when close (keeps it smooth).
-    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
-    float alphaFar   = 0.78f + g_aim.smooth * 0.10f;
-    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
-    if (alphaT < 0.0f) alphaT = 0.0f;
-    if (alphaT > 1.0f) alphaT = 1.0f;
-    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
+    float targetNX = (dx / pixelDist) * deflection;
+    float targetNY = (dy / pixelDist) * deflection;
+
+    // Output smoothing: original v1.0 values, stable for close/mid/far
+    float alpha = 0.38f + g_aim.smooth * 0.40f;
+    if (pixelDist < 25.0f) alpha *= 0.55f;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
@@ -817,12 +818,24 @@ FVec3 GetActorPosition(uint64_t actor)
     return Read<FVec3>(rootComp + offsets::core::RelativeLocation);
 }
 
+static uint64_t GetCurrentVehicle(uint64_t pawn)
+{
+    if (!pawn) return 0;
+    // Try a few common CurrentVehicle offsets; different vehicles/updates may use different ones.
+    uint64_t offsetsToTry[] = { offsets::player::CurrentVehicle, 0x2A98, 0x2B00, 0x2B50 };
+    for (auto off : offsetsToTry) {
+        uint64_t vehicle = Read<uint64_t>(pawn + off);
+        if (vehicle && vehicle != 0xFFFFFFFFFFFFFFFF) return vehicle;
+    }
+    return 0;
+}
+
 FVec3 GetPawnPosition(uint64_t pawn)
 {
     FVec3 pos = GetActorPosition(pawn);
     if (pos.x != 0.0 || pos.y != 0.0 || pos.z != 0.0) return pos;
     // Player may be in a vehicle; try the vehicle position
-    uint64_t vehicle = Read<uint64_t>(pawn + offsets::player::CurrentVehicle);
+    uint64_t vehicle = GetCurrentVehicle(pawn);
     if (vehicle) return GetActorPosition(vehicle);
     return pos;
 }
