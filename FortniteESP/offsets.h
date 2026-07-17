@@ -71,6 +71,7 @@ namespace player
     constexpr uintptr_t bIsSliding        = 0x723;       // 41.10, verify (Fort-specific)
     constexpr uintptr_t bIsSkydiving      = 0x216F;      // 41.10, verify (Fort-specific)
     constexpr uintptr_t bIsCrouched       = 0x430;       // confirmed (ACharacter)
+    constexpr uintptr_t CurrentVehicle    = 0x2AE8;      // unverified: vehicle pointer when player is seated
 }
 
 namespace weapon

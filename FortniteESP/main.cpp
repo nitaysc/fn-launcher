@@ -802,6 +802,28 @@ bool ReadFText(uint64_t addr, wchar_t* out, int maxChars)
 }
 
 // ============================================================
+// Position helpers with vehicle fallback
+// ============================================================
+FVec3 GetActorPosition(uint64_t actor)
+{
+    FVec3 result = {};
+    if (!actor) return result;
+    uint64_t rootComp = Read<uint64_t>(actor + offsets::core::RootComponent);
+    if (!rootComp) return result;
+    return Read<FVec3>(rootComp + offsets::core::RelativeLocation);
+}
+
+FVec3 GetPawnPosition(uint64_t pawn)
+{
+    FVec3 pos = GetActorPosition(pawn);
+    if (pos.x != 0.0 || pos.y != 0.0 || pos.z != 0.0) return pos;
+    // Player may be in a vehicle; try the vehicle position
+    uint64_t vehicle = Read<uint64_t>(pawn + offsets::player::CurrentVehicle);
+    if (vehicle) return GetActorPosition(vehicle);
+    return pos;
+}
+
+// ============================================================
 // Read all player data
 // ============================================================
 PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos)
@@ -811,9 +833,8 @@ PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos
     pd.shield = 0.f;
     pd.playerName[0] = L'\0';
 
-    uint64_t rootComp = Read<uint64_t>(pawn + offsets::core::RootComponent);
-    if (!rootComp) return pd;
-    pd.position = Read<FVec3>(rootComp + offsets::core::RelativeLocation);
+    pd.position = GetPawnPosition(pawn);
+    if (pd.position.x == 0.0 && pd.position.y == 0.0 && pd.position.z == 0.0) return pd;
 
     double dx = pd.position.x - localPos.x;
     double dy = pd.position.y - localPos.y;
@@ -904,8 +925,7 @@ void CollectESPData(ESPFrame& frame)
     FVec3 localPos = {};
     frame.localTeam = 0;
     if (localPawn) {
-        uint64_t localRoot = Read<uint64_t>(localPawn + offsets::core::RootComponent);
-        if (localRoot) localPos = Read<FVec3>(localRoot + offsets::core::RelativeLocation);
+        localPos = GetPawnPosition(localPawn);
         uint64_t lps = Read<uint64_t>(localPawn + offsets::player::PlayerState);
         if (lps) frame.localTeam = Read<uint8_t>(lps + offsets::player::TeamIndex);
 
@@ -944,9 +964,7 @@ void CollectESPData(ESPFrame& frame)
         if (dyingByte & 0x20) continue;
 
         // Quick distance check before expensive read
-        uint64_t rootComp = Read<uint64_t>(pawn + offsets::core::RootComponent);
-        if (!rootComp) continue;
-        FVec3 pos = Read<FVec3>(rootComp + offsets::core::RelativeLocation);
+        FVec3 pos = GetPawnPosition(pawn);
         if (pos.x == 0.0 && pos.y == 0.0 && pos.z == 0.0) continue;
         double dx2 = pos.x - localPos.x, dy2 = pos.y - localPos.y, dz2 = pos.z - localPos.z;
         double dist = sqrt(dx2 * dx2 + dy2 * dy2 + dz2 * dz2) / 100.0;
