@@ -951,7 +951,7 @@ void CollectESPData(ESPFrame& frame)
 
     // Collect all players within maxDistance, then keep the closest ones.
     // This ensures nearby enemies always get ESP even in 100-player lobbies.
-    const int MAX_RENDER_PLAYERS = 40;
+    const int MAX_RENDER_PLAYERS = 25;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
     for (int i = 0; i < playerCount; i++) {
@@ -998,7 +998,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
 
@@ -1532,7 +1532,7 @@ int main()
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_pSwapChain->Present(0, 0);
+        g_pSwapChain->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
 
         // Frame limiter: wait until target time reached from last frame
         LARGE_INTEGER now;
@@ -1565,10 +1565,10 @@ int main()
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd = {};
-    sd.BufferCount = 1;
+    sd.BufferCount = 2;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate = { 0, 1 };
-    sd.Flags = 0;
+    sd.BufferDesc.RefreshRate = { 60, 1 };
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
     sd.SampleDesc.Count = 1;
