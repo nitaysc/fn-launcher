@@ -951,7 +951,7 @@ void CollectESPData(ESPFrame& frame)
 
     // Collect all players within maxDistance, then keep the closest ones.
     // This ensures nearby enemies always get ESP even in 100-player lobbies.
-    const int MAX_RENDER_PLAYERS = 64;
+    const int MAX_RENDER_PLAYERS = 40;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
     for (int i = 0; i < playerCount; i++) {
@@ -1028,13 +1028,8 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    // Use the CURRENT camera matrix so ESP doesn't lag behind when the player moves the mouse.
-    // Throttle the live read to every 2nd frame to reduce driver overhead on low-end PCs.
-    static int viewUpdateFrame = 0;
-    if (++viewUpdateFrame >= 2) {
-        viewUpdateFrame = 0;
-        g_viewProjectionMatrix = GetCurrentViewProj();
-    }
+    // Read current view matrix every frame so ESP stays glued to players
+    g_viewProjectionMatrix = GetCurrentViewProj();
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
@@ -1545,11 +1540,7 @@ int main()
         double elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
         if (elapsed < (1.0 / 60.0)) {
             DWORD sleepMs = (DWORD)(((1.0 / 60.0) - elapsed) * 1000.0);
-            if (sleepMs > 1) Sleep(sleepMs - 1);
-            do {
-                QueryPerformanceCounter(&now);
-                elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
-            } while (elapsed < (1.0 / 60.0));
+            if (sleepMs > 0) Sleep(sleepMs);
         }
         QueryPerformanceCounter(&lastFrame);
     }
@@ -1574,10 +1565,10 @@ int main()
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd = {};
-    sd.BufferCount = 2;
+    sd.BufferCount = 1;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate = { 60, 1 };
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferDesc.RefreshRate = { 0, 1 };
+    sd.Flags = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
     sd.SampleDesc.Count = 1;
