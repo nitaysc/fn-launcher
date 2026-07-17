@@ -1595,7 +1595,7 @@ int main()
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         QueryPerformanceCounter(&t3);
-        g_pSwapChain->Present(1, 0);  // vsync — aligns with DWM composition, eliminates 27ms blocking
+        g_pSwapChain->Present(0, 0);
         QueryPerformanceCounter(&t4);
 
         static double avgESP = 0, avgAim = 0, avgDraw = 0, avgPresent = 0, avgTotal = 0;
