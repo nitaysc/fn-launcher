@@ -432,9 +432,6 @@ void RunAimbot()
 
     static bool keyHeld = false;
     static float prevNX = 0.0f, prevNY = 0.0f;
-    static int prevLockedIdx = -1;
-    static FVec3 prevTargetPos = { 0.0, 0.0, 0.0 };
-    static bool prevTargetValid = false;
     bool keyDown = (GetAsyncKeyState(g_aim.aimKey) & 0x8000) != 0;
     if (!keyDown) {
         if (keyHeld) {
@@ -443,14 +440,11 @@ void RunAimbot()
             keyHeld = false;
         }
         prevNX = 0.0f; prevNY = 0.0f;
-        prevLockedIdx = -1;
-        prevTargetValid = false;
         return;
     }
     if (!keyHeld) {
         keyHeld = true;
         prevNX = 0.0f; prevNY = 0.0f;
-        prevTargetValid = false;
     }
 
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
@@ -510,17 +504,14 @@ void RunAimbot()
         XUSB_REPORT report = {};
         g_vigem.Update(report);
         prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
-        prevTargetValid = false;
         return;
     }
     if (lockedIdx != bestIdx) {
         prevNX = 0.0f; prevNY = 0.0f;
-        prevTargetValid = false;
     }
     lockedIdx = bestIdx;
 
-    // Recompute target world position for the locked target and predict ahead
-    // to compensate for the ~16ms ESP data lag (helps vs sprinting/jumping players).
+    // Use the locked target's cached position directly — no prediction.
     const CachedPlayer& bestCp = frame.players[bestIdx];
     FVec3 targetPos;
     bool hasPos = false;
@@ -539,24 +530,8 @@ void RunAimbot()
     }
     if (!hasPos) return;
 
-    FVec3 aimPos = targetPos;
-    if (prevTargetValid && lockedIdx == prevLockedIdx) {
-        FVec3 velocity = {
-            targetPos.x - prevTargetPos.x,
-            targetPos.y - prevTargetPos.y,
-            targetPos.z - prevTargetPos.z
-        };
-        // Predict ~40ms ahead (2x the 20ms ESP frame time)
-        aimPos.x += velocity.x * 2.0;
-        aimPos.y += velocity.y * 2.0;
-        aimPos.z += velocity.z * 2.0;
-    }
-    prevLockedIdx = lockedIdx;
-    prevTargetPos = targetPos;
-    prevTargetValid = true;
-
     FVec2 screen;
-    if (!WorldToScreen(aimPos, screen)) return;
+    if (!WorldToScreen(targetPos, screen)) return;
     bestScreen = screen;
 
     // Proportional control: smooth approach, no oscillation
