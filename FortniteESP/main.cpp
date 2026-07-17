@@ -511,7 +511,8 @@ void RunAimbot()
     }
     lockedPawn = bestPawn;
 
-    // P-controller with small floor — strong enough to track but not fight mouse
+    // High-gain P-controller with heavy smoothing: strong signal, dampened response.
+    // No floor — near-center force scales naturally to zero, preventing oscillation.
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
@@ -527,22 +528,17 @@ void RunAimbot()
         return;
     }
 
-    float floorDeflect = 0.08f;
-    float farDist = 100.0f;
+    float farDist = 80.0f;
     float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float targetDeflect = (floorDeflect + (1.0f - floorDeflect) * t) * g_aim.stickSensitivity;
+    float targetDeflect = t * g_aim.stickSensitivity;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    float alphaClose = 0.55f + g_aim.smooth * 0.25f;
-    float alphaFar = 0.80f + g_aim.smooth * 0.10f;
-    float alphaT = (pixelDist - 20.0f) / (60.0f - 20.0f);
-    if (alphaT < 0.0f) alphaT = 0.0f;
-    if (alphaT > 1.0f) alphaT = 1.0f;
-    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
+    // Heavy smoothing prevents overshoot (strong signal + dampened response = stable fast lock)
+    float alpha = 0.22f + g_aim.smooth * 0.20f;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
