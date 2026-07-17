@@ -4,6 +4,7 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 #include <Windows.h>
+#include <timeapi.h>
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <d3d11.h>
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "winmm.lib")
 
 #include "driver.h"
 #include "offsets.h"
@@ -1472,6 +1474,8 @@ int main()
     printf("  Fortnite ESP Box - v41.20\n");
     printf("========================================\n\n");
 
+    timeBeginPeriod(1);  // 1ms timer resolution for better Sleep/DWM performance
+
     g_screenWidth = GetSystemMetrics(SM_CXSCREEN);
     g_screenHeight = GetSystemMetrics(SM_CYSCREEN);
     printf("[+] Screen: %dx%d\n", g_screenWidth, g_screenHeight);
@@ -1590,10 +1594,6 @@ int main()
         if (elapsed < (1.0 / 60.0)) {
             DWORD sleepMs = (DWORD)(((1.0 / 60.0) - elapsed) * 1000.0);
             if (sleepMs > 1) Sleep(sleepMs - 1);
-            do {
-                QueryPerformanceCounter(&now);
-                elapsed = (double)(now.QuadPart - lastFrame.QuadPart) / perfFreq.QuadPart;
-            } while (elapsed < (1.0 / 60.0));
         }
         QueryPerformanceCounter(&lastFrame);
     }
@@ -1618,10 +1618,10 @@ int main()
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd = {};
-    sd.BufferCount = 2;
+    sd.BufferCount = 3;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferDesc.RefreshRate = { 60, 1 };
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.Flags = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
     sd.SampleDesc.Count = 1;
