@@ -433,6 +433,9 @@ void RunAimbot()
 
     static bool keyHeld = false;
     static float prevNX = 0.0f, prevNY = 0.0f;
+    static uint64_t prevLockedPawn = 0;
+    static FVec3 prevTargetPos = { 0.0, 0.0, 0.0 };
+    static bool prevTargetValid = false;
     bool keyDown = (GetAsyncKeyState(g_aim.aimKey) & 0x8000) != 0;
     if (!keyDown) {
         if (keyHeld) {
@@ -441,11 +444,14 @@ void RunAimbot()
             keyHeld = false;
         }
         prevNX = 0.0f; prevNY = 0.0f;
+        prevLockedPawn = 0;
+        prevTargetValid = false;
         return;
     }
     if (!keyHeld) {
         keyHeld = true;
         prevNX = 0.0f; prevNY = 0.0f;
+        prevTargetValid = false;
     }
 
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
@@ -458,7 +464,6 @@ void RunAimbot()
     uint64_t bestPawn = 0;
     FVec2 bestScreen = {};
 
-    // Pawn-pointer target stickiness (robust against distance sorting)
     static uint64_t lockedPawn = 0;
 
     for (size_t i = 0; i < frame.players.size(); i++) {
@@ -466,29 +471,28 @@ void RunAimbot()
         if (!cp.valid) continue;
         if (!g_aim.aimAtTeam && cp.pd.teamIndex == frame.localTeam && frame.localTeam != 0) continue;
 
-        FVec3 targetPos;
+        FVec3 tPos;
         bool hasPos = false;
         if (cp.pd.hasBones) {
-            targetPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-            targetPos.z += 10.0; // bone is neck base, lift to top of head
-            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+            tPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
+            tPos.z += 10.0;
+            hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) {
             if (cp.pd.hasBones) {
-                targetPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
-                targetPos.z += 5.0; // center of chest
-                hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+                tPos = cp.pd.bones[offsets::aimbot::BONE_CHEST];
+                hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
             }
         }
         if (!hasPos) {
-            targetPos = cp.pd.position;
-            targetPos.z += 170.0;
-            hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+            tPos = cp.pd.position;
+            tPos.z += 170.0;
+            hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) continue;
 
         FVec2 screen;
-        if (!WorldToScreen(targetPos, screen)) continue;
+        if (!WorldToScreen(tPos, screen)) continue;
 
         float screenDist = ScreenDistToCrosshair(screen);
         if (cp.pawn == lockedPawn) screenDist *= 0.6f;
@@ -504,22 +508,69 @@ void RunAimbot()
         XUSB_REPORT report = {};
         g_vigem.Update(report);
         prevNX = prevNX * 0.5f; prevNY = prevNY * 0.5f;
+        prevTargetValid = false;
         return;
     }
     if (lockedPawn != bestPawn) {
         prevNX = 0.0f; prevNY = 0.0f;
+        prevTargetValid = false;
     }
     lockedPawn = bestPawn;
 
-    // Power curve: near-zero at center (no fight), ramps up fast for strong tracking.
-    // exponent 1.5 means: 5px=0%, 20px=8%, 50px=31%, 100px=85%
+    // Recompute target world position and predict ahead (~30ms)
+    const CachedPlayer* bestCp = nullptr;
+    for (const auto& cp : frame.players) {
+        if (cp.pawn == bestPawn && cp.valid) { bestCp = &cp; break; }
+    }
+    if (!bestCp) return;
+
+    FVec3 targetPos;
+    bool hasPos = false;
+    if (bestCp->pd.hasBones) {
+        targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
+        targetPos.z += 10.0;
+        hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+    }
+    if (!hasPos && bestCp->pd.hasBones) {
+        targetPos = bestCp->pd.bones[offsets::aimbot::BONE_CHEST];
+        hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+    }
+    if (!hasPos) {
+        targetPos = bestCp->pd.position;
+        targetPos.z += 170.0;
+        hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
+    }
+    if (!hasPos) return;
+
+    FVec3 aimPos = targetPos;
+    if (prevTargetValid && lockedPawn == prevLockedPawn) {
+        FVec3 velocity = {
+            targetPos.x - prevTargetPos.x,
+            targetPos.y - prevTargetPos.y,
+            targetPos.z - prevTargetPos.z
+        };
+        // Predict ~30ms ahead to compensate for data thread latency
+        aimPos.x += velocity.x * 1.5;
+        aimPos.y += velocity.y * 1.5;
+        aimPos.z += velocity.z * 1.5;
+    }
+    prevLockedPawn = lockedPawn;
+    prevTargetPos = targetPos;
+    prevTargetValid = true;
+
+    FVec2 screen;
+    if (!WorldToScreen(aimPos, screen)) return;
+    bestScreen = screen;
+
+    // v1.0 proven math: power curve with floor, close-range caps, light smoothing
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
-    if (pixelDist < 2.0f) {
+    float deadzonePx = 0.5f + g_aim.smooth * 5.0f;
+    if (pixelDist < deadzonePx) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
         g_vigem.Update(report);
@@ -527,15 +578,27 @@ void RunAimbot()
         return;
     }
 
-    float t = pixelDist / 100.0f;
+    float exponent = 0.45f + g_aim.smooth * 1.2f;
+    float farDist = 160.0f;
+    float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
+    if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float targetDeflect = powf(t, 1.5f) * g_aim.stickSensitivity;
+    float deflection = (0.12f + 0.88f * pow(t, exponent)) * g_aim.stickSensitivity;
 
-    float targetNX = (dx / pixelDist) * targetDeflect;
-    float targetNY = (dy / pixelDist) * targetDeflect;
+    if (pixelDist < 10.0f && deflection > 0.40f)
+        deflection = 0.40f;
 
-    float alpha = 0.50f - g_aim.smooth * 0.30f;
+    float closeRange = 50.0f;
+    if (pixelDist < closeRange) {
+        float maxClose = 0.22f + (g_aim.stickSensitivity - 0.22f) * (pixelDist / closeRange);
+        if (deflection > maxClose) deflection = maxClose;
+    }
 
+    float targetNX = (dx / pixelDist) * deflection;
+    float targetNY = (dy / pixelDist) * deflection;
+
+    float alpha = 0.38f + g_aim.smooth * 0.40f;
+    if (pixelDist < 25.0f) alpha *= 0.55f;
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
     prevNX = nx;
