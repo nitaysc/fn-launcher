@@ -550,9 +550,9 @@ void RunAimbot()
             targetPos.z - prevTargetPos.z
         };
         // Predict ~30ms ahead to compensate for data thread latency
-        aimPos.x += velocity.x * 1.5;
-        aimPos.y += velocity.y * 1.5;
-        aimPos.z += velocity.z * 1.5;
+        aimPos.x += velocity.x * 1.0;
+        aimPos.y += velocity.y * 1.0;
+        aimPos.z += velocity.z * 1.0;
     }
     prevLockedPawn = lockedPawn;
     prevTargetPos = targetPos;
@@ -955,10 +955,7 @@ void CollectESPData(ESPFrame& frame)
     if (!playerController) return;
     uint64_t localPawn = Read<uint64_t>(playerController + offsets::player::LocalPawn);
 
-    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
-    int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
-    if (!viewArrayData || viewArrayCount <= 0) return;
-    frame.viewProj = Read<FMatrix>(viewArrayData + 256);
+    frame.viewProj = {};
 
     FVec3 localPos = {};
     frame.localTeam = 0;
@@ -1035,7 +1032,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
 }
 
