@@ -511,15 +511,15 @@ void RunAimbot()
     }
     lockedPawn = bestPawn;
 
-    // v1.22 adaptive P-controller: fast far, gentle close. No floor.
+    // Power curve: near-zero at center (no fight), ramps up fast for strong tracking.
+    // exponent 1.5 means: 5px=0%, 20px=8%, 50px=31%, 100px=85%
     float cx = g_screenWidth * 0.5f;
     float cy = g_screenHeight * 0.5f;
     float dx = bestScreen.x - cx;
     float dy = bestScreen.y - cy;
     float pixelDist = sqrtf(dx * dx + dy * dy);
 
-    float deadzonePx = 2.0f + g_aim.smooth * 10.0f;
-    if (pixelDist < deadzonePx) {
+    if (pixelDist < 2.0f) {
         XUSB_REPORT report = {};
         if (g_aim.autoFire) report.wButtons = XUSB_GAMEPAD_A;
         g_vigem.Update(report);
@@ -527,23 +527,14 @@ void RunAimbot()
         return;
     }
 
-    float farDist = 120.0f;
-    float t = (pixelDist - deadzonePx) / (farDist - deadzonePx);
-    if (t < 0.0f) t = 0.0f;
+    float t = pixelDist / 100.0f;
     if (t > 1.0f) t = 1.0f;
-    float targetDeflect = t * g_aim.stickSensitivity;
+    float targetDeflect = powf(t, 1.5f) * g_aim.stickSensitivity;
 
     float targetNX = (dx / pixelDist) * targetDeflect;
     float targetNY = (dy / pixelDist) * targetDeflect;
 
-    // Adaptive smoothing: less smoothing when far (close gap fast),
-    // more smoothing when close (settle gently, no overshoot)
-    float alphaClose = 0.55f + g_aim.smooth * 0.20f;
-    float alphaFar = 0.78f + g_aim.smooth * 0.10f;
-    float alphaT = (pixelDist - 30.0f) / (80.0f - 30.0f);
-    if (alphaT < 0.0f) alphaT = 0.0f;
-    if (alphaT > 1.0f) alphaT = 1.0f;
-    float alpha = alphaClose + (alphaFar - alphaClose) * alphaT;
+    float alpha = 0.50f - g_aim.smooth * 0.30f;
 
     float nx = prevNX + (targetNX - prevNX) * alpha;
     float ny = prevNY + (targetNY - prevNY) * alpha;
