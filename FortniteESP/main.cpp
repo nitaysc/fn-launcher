@@ -1041,7 +1041,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 }
 
@@ -1071,9 +1071,8 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    // Use the CURRENT camera matrix so ESP doesn't lag behind when the player moves the mouse.
-    // Throttle the live read to every 2nd frame to reduce driver overhead on low-end PCs.
-    g_viewProjectionMatrix = GetCurrentViewProj();
+    // Use cached view matrix from data thread (no driver calls in render thread)
+    g_viewProjectionMatrix = frame.viewProj;
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
