@@ -482,7 +482,7 @@ void RunAimbot()
         bool hasPos = false;
         if (cp.pd.hasBones) {
             tPos = cp.pd.bones[offsets::aimbot::BONE_HEAD];
-tPos.z += 6.0;
+tPos.z += 3.0;
             hasPos = (tPos.x != 0.0 || tPos.y != 0.0 || tPos.z != 0.0);
         }
         if (!hasPos) {
@@ -535,7 +535,7 @@ tPos.z += 6.0;
     bool hasPos = false;
     if (bestCp->pd.hasBones) {
         targetPos = bestCp->pd.bones[offsets::aimbot::BONE_HEAD];
-        targetPos.z += 6.0;
+        targetPos.z += 3.0;
         hasPos = (targetPos.x != 0.0 || targetPos.y != 0.0 || targetPos.z != 0.0);
     }
     if (!hasPos && bestCp->pd.hasBones) {
@@ -1127,17 +1127,8 @@ void RenderESP()
         float minX = 99999, minY = 99999, maxX = -99999, maxY = -99999;
         int projected = 0;
 
-        // Time-based interpolation using frame's capture timestamp for smooth ESP
-        static LARGE_INTEGER espFreq;
-        static bool freqInit = false;
-        if (!freqInit) { QueryPerformanceFrequency(&espFreq); freqInit = true; }
-        LARGE_INTEGER nowQPC;
-        QueryPerformanceCounter(&nowQPC);
-        double elapsed = (double)(nowQPC.QuadPart - frame.captureTime.QuadPart) / espFreq.QuadPart;
-        float t = (float)(elapsed / 0.016); // normalize to data interval
-        if (t > 1.5f) t = 1.5f;
-        if (t < 0.0f) t = 0.0f;
-        FVec3 predOffset = { pd.velocity.x * t, pd.velocity.y * t, pd.velocity.z * t };
+        // Use exact positions (no prediction — prediction overshoots at varying distances)
+        FVec3 predOffset = { 0, 0, 0 };
 
         if (pd.hasBones) {
             int cornerBones[] = { 0, 3, 4, 7 };
