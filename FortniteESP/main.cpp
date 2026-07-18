@@ -865,6 +865,10 @@ FVec3 GetActorPosition(uint64_t actor)
     if (!actor) return result;
     uint64_t rootComp = Read<uint64_t>(actor + offsets::core::RootComponent);
     if (!rootComp) return result;
+    // ComponentToWorld gives the WORLD position (works even when attached to vehicle)
+    result = Read<FVec3>(rootComp + offsets::core::ComponentToWorld + 0x20);
+    if (result.x != 0.0 || result.y != 0.0 || result.z != 0.0) return result;
+    // Fallback to relative position
     return Read<FVec3>(rootComp + offsets::core::RelativeLocation);
 }
 
