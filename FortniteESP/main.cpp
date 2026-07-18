@@ -623,6 +623,8 @@ tPos.z += 6.0;
         float maxClose = 0.16f + (g_aim.stickSensitivity - 0.16f) * (pixelDist / closeRange);
         if (deflection > maxClose) deflection = maxClose;
     }
+    if (pixelDist < 20.0f)
+        deflection *= 0.2f + 0.8f * (pixelDist / 20.0f);
 
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
