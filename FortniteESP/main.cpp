@@ -147,6 +147,12 @@ int g_playerCount = 0;
 int g_renderFrameIdx = 0;
 static double g_avgESPms = 0, g_avgAimMs = 0, g_avgDrawMs = 0, g_avgPresentMs = 0;
 static bool g_debugScan = false;
+static uint64_t g_debugPS = 0;
+static uint64_t g_debugPawn = 0;
+static float g_debugFloats[64];
+static int32_t g_debugInts[64];
+static char g_debugName[128];
+static int g_debugCount = 0;
 
 struct ScreenBone { FVec2 s; bool visible; };
 
@@ -1525,40 +1531,53 @@ void RenderMenu()
         }
 
         if (ImGui::BeginTabItem("Debug")) {
-            if (ImGui::Button("Scan PlayerState Health")) {
+            if (ImGui::Button("Scan PlayerState (click, then look below)")) {
                 g_debugScan = true;
             }
             if (g_debugScan && g_targetPID) {
                 // Find first enemy playerState to scan
                 const ESPFrame& frame = g_frames[g_renderFrameIdx];
+                bool found = false;
                 for (const auto& cp : frame.players) {
                     if (!cp.valid) continue;
-                    uint64_t ps = Read<uint64_t>(cp.pawn + offsets::player::PlayerState);
-                    if (!ps) continue;
-                    ImGui::Text("PlayerState: 0x%llX (Pawn: 0x%llX)", ps, cp.pawn);
-                    ImGui::Text("Offset  | Float       | Int         | Hex");
-                    ImGui::Separator();
+                    g_debugPawn = cp.pawn;
+                    g_debugPS = Read<uint64_t>(cp.pawn + offsets::player::PlayerState);
+                    if (!g_debugPS) continue;
+                    g_debugCount = 0;
                     for (int off = 0xCC0; off <= 0xCE8; off += 4) {
-                        float fv = Read<float>(ps + off);
-                        int32_t iv = Read<int32_t>(ps + off);
-                        bool match = (fv >= 1.0f && fv <= 250.0f);
-                        ImGui::TextColored(match ? ImVec4(0,1,0,1) : ImVec4(0.5f,0.5f,0.5f,1),
-                            "0x%04X | %8.1f | %8d | %08X", off, fv, iv, iv);
+                        g_debugFloats[g_debugCount] = Read<float>(g_debugPS + off);
+                        g_debugInts[g_debugCount] = Read<int32_t>(g_debugPS + off);
+                        g_debugCount++;
                     }
-                    ImGui::Separator();
-                    ImGui::Text("PlayerNamePrivate at 0x308:");
-                    uint64_t namePtr = Read<uint64_t>(ps + 0x308);
-                    int32_t nameLen = Read<int32_t>(ps + 0x310);
-                    char nameBuf[128] = {};
+                    // Try player name
+                    uint64_t namePtr = Read<uint64_t>(g_debugPS + 0x308);
+                    int32_t nameLen = Read<int32_t>(g_debugPS + 0x310);
+                    g_debugName[0] = 0;
                     if (namePtr && nameLen > 0 && nameLen < 64) {
                         wchar_t wbuf[64] = {};
                         xhdr::ProcessRead(g_targetPID, namePtr, wbuf, nameLen * 2);
-                        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, nameBuf, 128, 0, 0);
+                        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_debugName, 128, 0, 0);
                     }
-                    ImGui::Text("  Ptr=0x%llX Len=%d Name=[%s]", namePtr, nameLen, nameBuf);
                     g_debugScan = false;
+                    found = true;
                     break;
                 }
+                if (!found) g_debugScan = false;
+            }
+            if (g_debugPS) {
+                ImGui::Text("PlayerState: 0x%llX (Pawn: 0x%llX)", g_debugPS, g_debugPawn);
+                ImGui::Text("Offset  | Float       | Int         | Hex");
+                ImGui::Separator();
+                for (int i = 0; i < g_debugCount; i++) {
+                    int off = 0xCC0 + i * 4;
+                    float fv = g_debugFloats[i];
+                    int32_t iv = g_debugInts[i];
+                    bool match = (fv >= 1.0f && fv <= 250.0f);
+                    ImGui::TextColored(match ? ImVec4(0,1,0,1) : ImVec4(0.5f,0.5f,0.5f,1),
+                        "0x%04X | %8.1f | %8d | %08X", off, fv, iv, iv);
+                }
+                ImGui::Separator();
+                ImGui::Text("PlayerName at 0x308: [%s]", g_debugName[0] ? g_debugName : "(empty)");
             }
             ImGui::EndTabItem();
         }
