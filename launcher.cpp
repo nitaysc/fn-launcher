@@ -135,22 +135,49 @@ static std::string HttpGet(const char* url)
 }
 static std::string ExtractJson(const std::string& j, const char* f)
 {
-    char s[128]; sprintf_s(s, "\"%s\":\"", f); size_t p = j.find(s);
-    if (p == -1) return ""; p += strlen(s);
+    char s[2][128];
+    sprintf_s(s[0], "\"%s\":\"", f);
+    sprintf_s(s[1], "\"%s\": \"", f);
+    size_t p;
+    for (int i = 0; i < 2; i++) {
+        p = j.find(s[i]);
+        if (p != -1) { p += strlen(s[i]); break; }
+    }
+    if (p == -1) return "";
     size_t e = j.find("\"", p); return e == -1 ? "" : j.substr(p, e-p);
 }
 static std::string FindAssetUrl(const std::string& j, const char* namePart)
 {
     size_t p = 0;
-    while ((p = j.find("\"name\":\"", p)) != std::string::npos) {
-        p += 8;
+    const char* patterns[] = { "\"name\":\"", "\"name\": \"" };
+    while (true) {
+        size_t best = std::string::npos;
+        int bestPat = -1;
+        for (int i = 0; i < 2; i++) {
+            size_t found = j.find(patterns[i], p);
+            if (found != std::string::npos && found < best) {
+                best = found;
+                bestPat = i;
+            }
+        }
+        if (bestPat == -1) break;
+        size_t keyLen = strlen(patterns[bestPat]);
+        p = best + keyLen;
         size_t e = j.find("\"", p);
         if (e == std::string::npos) break;
         std::string name = j.substr(p, e - p);
         if (name.find(namePart) != std::string::npos) {
-            size_t urlP = j.find("\"browser_download_url\":\"", e);
+            size_t urlP;
+            const char* urlPatterns[] = { "\"browser_download_url\":\"", "\"browser_download_url\": \"" };
+            urlP = std::string::npos;
+            for (int i = 0; i < 2; i++) {
+                urlP = j.find(urlPatterns[i], e);
+                if (urlP != std::string::npos) {
+                    urlP += strlen(urlPatterns[i]);
+                    break;
+                }
+            }
             if (urlP != std::string::npos) {
-                urlP += 24;
                 size_t urlE = j.find("\"", urlP);
                 if (urlE != std::string::npos) return j.substr(urlP, urlE - urlP);
             }
