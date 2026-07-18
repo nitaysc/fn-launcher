@@ -888,11 +888,21 @@ FVec3 GetPawnPosition(uint64_t pawn)
 PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos)
 {
     PlayerData pd = {};
-    pd.health = Read<float>(playerState + offsets::player::CurrentHealth);
-    pd.shield = Read<float>(playerState + offsets::player::CurrentShield);
-    if (pd.health <= 0.f || pd.health > 300.f) pd.health = 100.f;
-    if (pd.shield < 0.f || pd.shield > 300.f) pd.shield = 0.f;
     pd.playerName[0] = L'\0';
+    // Try reading health/shield from playerState as float first, then as int
+    pd.health = Read<float>(playerState + 0xCD4);
+    pd.shield = Read<float>(playerState + 0xCDC);
+    if (pd.health <= 0.f || pd.health > 300.f) {
+        // Maybe stored as int (hundredths)? Try as integer
+        int rawH = Read<int32_t>(playerState + 0xCD4);
+        if (rawH > 0 && rawH < 30000) pd.health = rawH / 100.0f;
+        else pd.health = 100.f;
+    }
+    if (pd.shield < 0.f || pd.shield > 300.f) {
+        int rawS = Read<int32_t>(playerState + 0xCDC);
+        if (rawS > 0 && rawS < 30000) pd.shield = rawS / 100.0f;
+        else pd.shield = 0.f;
+    }
 
     pd.position = GetPawnPosition(pawn);
     if (pd.position.x == 0.0 && pd.position.y == 0.0 && pd.position.z == 0.0) return pd;
