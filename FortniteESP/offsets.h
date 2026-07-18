@@ -72,6 +72,13 @@ namespace player
     constexpr uintptr_t bIsSkydiving      = 0x216F;      // 41.10, verify (Fort-specific)
     constexpr uintptr_t bIsCrouched       = 0x430;       // confirmed (ACharacter)
     constexpr uintptr_t CurrentVehicle    = 0x2AE8;      // unverified: vehicle pointer when player is seated
+
+    // Health/Shield offsets (FortPawn)
+    constexpr uintptr_t Health           = 0x1AAC;      // CurrentHealth on FortPawn (verify)
+    constexpr uintptr_t Shield           = 0x1AB0;      // CurrentShield on FortPawn (verify)
+    constexpr uintptr_t MaxHealth        = 0x1AB4;      // MaxHealth on FortPawn (verify)
+    constexpr uintptr_t MaxShield        = 0x1AB8;      // MaxShield on FortPawn (verify)
+    constexpr uintptr_t PlayerName       = 0x338;       // Text_PlayerName on AFortPlayerState (verify)
 }
 
 namespace weapon
