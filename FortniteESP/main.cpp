@@ -1005,7 +1005,7 @@ void CollectESPData(ESPFrame& frame)
 
     // Collect all players within maxDistance, then keep the closest ones.
     // This ensures nearby enemies always get ESP even in 100-player lobbies.
-    const int MAX_RENDER_PLAYERS = 40;
+    const int MAX_RENDER_PLAYERS = 100;
     frame.players.reserve(playerCount < MAX_RENDER_PLAYERS ? playerCount : MAX_RENDER_PLAYERS);
 
     // Track previous positions for velocity prediction
