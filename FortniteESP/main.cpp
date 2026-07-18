@@ -556,9 +556,9 @@ tPos.z += 3.0;
             targetPos.y - prevTargetPos.y,
             targetPos.z - prevTargetPos.z
         };
-        aimPos.x += velocity.x * 0.8f;
-        aimPos.y += velocity.y * 0.8f;
-        aimPos.z += velocity.z * 0.8f;
+        aimPos.x += velocity.x * 0.3f;
+        aimPos.y += velocity.y * 0.3f;
+        aimPos.z += velocity.z * 0.3f;
     }
     prevLockedPawn = lockedPawn;
     prevTargetPos = targetPos;
