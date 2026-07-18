@@ -1083,10 +1083,17 @@ void ESPThreadFunc()
 FMatrix GetCurrentViewProj()
 {
     if (!g_targetPID) return g_frames[g_renderFrameIdx].viewProj;
-    uint64_t uworld = GetUWorld();
-    if (!uworld) return g_frames[g_renderFrameIdx].viewProj;
-    uint64_t viewArrayData = Read<uint64_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame);
-    int32_t viewArrayCount = Read<int32_t>(uworld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
+
+    static uint64_t cachedUWorld = 0;
+    static int refreshCounter = 0;
+    if (++refreshCounter >= 120 || !cachedUWorld) {
+        refreshCounter = 0;
+        cachedUWorld = GetUWorld();
+    }
+    if (!cachedUWorld) return g_frames[g_renderFrameIdx].viewProj;
+
+    uint64_t viewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
+    int32_t viewArrayCount = Read<int32_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
     if (!viewArrayData || viewArrayCount <= 0) return g_frames[g_renderFrameIdx].viewProj;
     FMatrix mat = Read<FMatrix>(viewArrayData + 256);
     if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
