@@ -1071,7 +1071,7 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
 
@@ -1101,8 +1101,15 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    // Read current view matrix every frame so ESP stays glued to players
-    g_viewProjectionMatrix = GetCurrentViewProj();
+    // Use view matrix from data thread (synced with positions, zero driver calls in render)
+    static FMatrix lastGoodMatrix = {};
+    if (frame.viewProj.m[3][3] != 0.0) {
+        g_viewProjectionMatrix = frame.viewProj;
+        lastGoodMatrix = frame.viewProj;
+    } else {
+        g_viewProjectionMatrix = lastGoodMatrix;
+    }
+    if (g_viewProjectionMatrix.m[3][3] == 0.0) return; // no valid matrix yet
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
