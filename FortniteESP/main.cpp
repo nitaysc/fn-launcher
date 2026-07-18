@@ -615,13 +615,6 @@ tPos.z += 3.0;
     if (t > 1.0f) t = 1.0f;
     float deflection = (0.08f + 0.92f * pow(t, exponent)) * g_aim.stickSensitivity;
 
-    // Scale down for tiny targets (long range): prevents overshoot when head is 2-3px
-    float microRange = 20.0f;
-    if (pixelDist < microRange) {
-        float microScale = 0.2f + 0.8f * (pixelDist / microRange);
-        deflection *= microScale;
-    }
-
     if (pixelDist < 10.0f && deflection > 0.40f)
         deflection = 0.40f;
 
@@ -630,6 +623,9 @@ tPos.z += 3.0;
         float maxClose = 0.16f + (g_aim.stickSensitivity - 0.16f) * (pixelDist / closeRange);
         if (deflection > maxClose) deflection = maxClose;
     }
+    // Micro-range: reduce stick for tiny targets (long range) to prevent overshoot
+    if (pixelDist < 20.0f)
+        deflection *= 0.2f + 0.8f * (pixelDist / 20.0f);
 
     float targetNX = (dx / pixelDist) * deflection;
     float targetNY = (dy / pixelDist) * deflection;
