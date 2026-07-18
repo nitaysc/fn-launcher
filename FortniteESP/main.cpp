@@ -1022,7 +1022,9 @@ void CollectESPData(ESPFrame& frame)
         if (!playerState) continue;
 
         uint64_t pawn = Read<uint64_t>(playerState + offsets::player::PawnPrivate);
-        if (!pawn || pawn == localPawn) continue;
+        if (!pawn) continue;
+        // Skip own pawn only when actually playing (not spectating with localPos at origin)
+        if (pawn == localPawn && (localPos.x != 0.0 || localPos.y != 0.0 || localPos.z != 0.0)) continue;
 
         // Quick distance check before expensive read
         FVec3 pos = GetPawnPosition(pawn);
