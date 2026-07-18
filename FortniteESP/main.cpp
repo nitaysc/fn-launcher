@@ -146,6 +146,7 @@ uint64_t g_gameBase = 0;
 int g_playerCount = 0;
 int g_renderFrameIdx = 0;
 static double g_avgESPms = 0, g_avgAimMs = 0, g_avgDrawMs = 0, g_avgPresentMs = 0;
+static bool g_debugScan = false;
 
 struct ScreenBone { FVec2 s; bool visible; };
 
@@ -1520,6 +1521,45 @@ void RenderMenu()
             else ImGui::TextColored(ImVec4(1,0,0,1), "ViGEm: Not Connected");
             ImGui::Spacing();
             ImGui::ColorEdit4("FOV Circle Color", g_aim.fovCircleColor, ImGuiColorEditFlags_NoInputs);
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Debug")) {
+            if (ImGui::Button("Scan PlayerState Health")) {
+                g_debugScan = true;
+            }
+            if (g_debugScan && g_targetPID) {
+                // Find first enemy playerState to scan
+                const ESPFrame& frame = g_frames[g_renderFrameIdx];
+                for (const auto& cp : frame.players) {
+                    if (!cp.valid) continue;
+                    uint64_t ps = Read<uint64_t>(cp.pawn + offsets::player::PlayerState);
+                    if (!ps) continue;
+                    ImGui::Text("PlayerState: 0x%llX (Pawn: 0x%llX)", ps, cp.pawn);
+                    ImGui::Text("Offset  | Float       | Int         | Hex");
+                    ImGui::Separator();
+                    for (int off = 0xCC0; off <= 0xCE8; off += 4) {
+                        float fv = Read<float>(ps + off);
+                        int32_t iv = Read<int32_t>(ps + off);
+                        bool match = (fv >= 1.0f && fv <= 250.0f);
+                        ImGui::TextColored(match ? ImVec4(0,1,0,1) : ImVec4(0.5f,0.5f,0.5f,1),
+                            "0x%04X | %8.1f | %8d | %08X", off, fv, iv, iv);
+                    }
+                    ImGui::Separator();
+                    ImGui::Text("PlayerNamePrivate at 0x308:");
+                    uint64_t namePtr = Read<uint64_t>(ps + 0x308);
+                    int32_t nameLen = Read<int32_t>(ps + 0x310);
+                    char nameBuf[128] = {};
+                    if (namePtr && nameLen > 0 && nameLen < 64) {
+                        wchar_t wbuf[64] = {};
+                        xhdr::ProcessRead(g_targetPID, namePtr, wbuf, nameLen * 2);
+                        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, nameBuf, 128, 0, 0);
+                    }
+                    ImGui::Text("  Ptr=0x%llX Len=%d Name=[%s]", namePtr, nameLen, nameBuf);
+                    g_debugScan = false;
+                    break;
+                }
+            }
             ImGui::EndTabItem();
         }
 
