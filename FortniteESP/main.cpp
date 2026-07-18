@@ -166,6 +166,7 @@ struct ESPFrame {
     bool hasData;
     PlayerData localPlayer;
     bool hasLocalPlayer;
+    LARGE_INTEGER captureTime;  // when data was captured (for interpolation)
 };
 
 static ESPFrame g_frames[2];
@@ -1060,6 +1061,7 @@ void CollectESPData(ESPFrame& frame)
         frame.players.resize(MAX_RENDER_PLAYERS);
 
     frame.hasData = true;
+    QueryPerformanceCounter(&frame.captureTime);
 }
 
 void ESPThreadFunc()
@@ -1117,8 +1119,17 @@ void RenderESP()
         float minX = 99999, minY = 99999, maxX = -99999, maxY = -99999;
         int projected = 0;
 
-        float predictFactor = 0.8f;
-        FVec3 predOffset = { pd.velocity.x * predictFactor, pd.velocity.y * predictFactor, pd.velocity.z * predictFactor };
+        // Time-based interpolation using frame's capture timestamp for smooth ESP
+        static LARGE_INTEGER espFreq;
+        static bool freqInit = false;
+        if (!freqInit) { QueryPerformanceFrequency(&espFreq); freqInit = true; }
+        LARGE_INTEGER nowQPC;
+        QueryPerformanceCounter(&nowQPC);
+        double elapsed = (double)(nowQPC.QuadPart - frame.captureTime.QuadPart) / espFreq.QuadPart;
+        float t = (float)(elapsed / 0.016); // normalize to data interval
+        if (t > 1.5f) t = 1.5f;
+        if (t < 0.0f) t = 0.0f;
+        FVec3 predOffset = { pd.velocity.x * t, pd.velocity.y * t, pd.velocity.z * t };
 
         if (pd.hasBones) {
             int cornerBones[] = { 0, 3, 4, 7 };
