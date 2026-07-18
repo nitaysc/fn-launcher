@@ -1085,17 +1085,18 @@ FMatrix GetCurrentViewProj()
     if (!g_targetPID) return g_frames[g_renderFrameIdx].viewProj;
 
     static uint64_t cachedUWorld = 0;
+    static uint64_t cachedViewArrayData = 0;
     static int refreshCounter = 0;
-    if (++refreshCounter >= 120 || !cachedUWorld) {
+    if (++refreshCounter >= 120 || !cachedUWorld || !cachedViewArrayData) {
         refreshCounter = 0;
         cachedUWorld = GetUWorld();
+        if (cachedUWorld) {
+            cachedViewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
+        }
     }
-    if (!cachedUWorld) return g_frames[g_renderFrameIdx].viewProj;
+    if (!cachedUWorld || !cachedViewArrayData) return g_frames[g_renderFrameIdx].viewProj;
 
-    uint64_t viewArrayData = Read<uint64_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame);
-    int32_t viewArrayCount = Read<int32_t>(cachedUWorld + offsets::core::CachedViewInfoRenderedLastFrame + 0x8);
-    if (!viewArrayData || viewArrayCount <= 0) return g_frames[g_renderFrameIdx].viewProj;
-    FMatrix mat = Read<FMatrix>(viewArrayData + 256);
+    FMatrix mat = Read<FMatrix>(cachedViewArrayData + 256);
     if (mat.m[3][3] == 0.0) return g_frames[g_renderFrameIdx].viewProj;
     return mat;
 }
