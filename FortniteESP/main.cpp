@@ -1101,15 +1101,8 @@ void RenderESP()
     const ESPFrame& frame = g_frames[g_renderFrameIdx];
     if (!frame.hasData) return;
 
-    // Use view matrix from data thread (synced with positions, zero driver calls in render)
-    static FMatrix lastGoodMatrix = {};
-    if (frame.viewProj.m[3][3] != 0.0) {
-        g_viewProjectionMatrix = frame.viewProj;
-        lastGoodMatrix = frame.viewProj;
-    } else {
-        g_viewProjectionMatrix = lastGoodMatrix;
-    }
-    if (g_viewProjectionMatrix.m[3][3] == 0.0) return; // no valid matrix yet
+    // Read current view matrix every frame (fresh, ~3ms old) so ESP stays glued
+    g_viewProjectionMatrix = GetCurrentViewProj();
     ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
     for (const auto& cp : frame.players) {
@@ -1125,7 +1118,7 @@ void RenderESP()
         int projected = 0;
 
         // Predict position forward using tracked velocity (compensates for data latency)
-        float predictFactor = 0.5f;
+        float predictFactor = 0.8f;
         FVec3 predOffset = { pd.velocity.x * predictFactor, pd.velocity.y * predictFactor, pd.velocity.z * predictFactor };
 
         if (pd.hasBones) {
