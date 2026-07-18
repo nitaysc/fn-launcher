@@ -888,8 +888,10 @@ FVec3 GetPawnPosition(uint64_t pawn)
 PlayerData ReadPlayerDataFor(uint64_t playerState, uint64_t pawn, FVec3 localPos)
 {
     PlayerData pd = {};
-    pd.health = 100.f;
-    pd.shield = 0.f;
+    pd.health = Read<float>(playerState + offsets::player::CurrentHealth);
+    pd.shield = Read<float>(playerState + offsets::player::CurrentShield);
+    if (pd.health <= 0.f || pd.health > 300.f) pd.health = 100.f;
+    if (pd.shield < 0.f || pd.shield > 300.f) pd.shield = 0.f;
     pd.playerName[0] = L'\0';
 
     pd.position = GetPawnPosition(pawn);

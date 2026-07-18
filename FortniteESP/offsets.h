@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // ===========================================================================
 // Offsets & Decryption - Fortnite UE5
 //
@@ -72,10 +72,8 @@ namespace player
     constexpr uintptr_t bIsSkydiving      = 0x216F;      // 41.10, verify (Fort-specific)
     constexpr uintptr_t bIsCrouched       = 0x430;       // confirmed (ACharacter)
     constexpr uintptr_t CurrentVehicle    = 0x2AE8;      // unverified: vehicle pointer when player is seated
-
-    // Health/Shield (from AFortPlayerStateZone via cheatoffsets.com 41.20)
-    constexpr uintptr_t CurrentHealth     = 0xCD4;       // AFortPlayerStateZone::CurrentHealth
-    constexpr uintptr_t CurrentShield     = 0xCDC;       // AFortPlayerStateZone::CurrentShield
+    constexpr uintptr_t CurrentHealth     = 0xCD4;       // AFortPlayerStateZone::CurrentHealth (cheatoffsets 41.20)
+    constexpr uintptr_t CurrentShield     = 0xCDC;       // AFortPlayerStateZone::CurrentShield (cheatoffsets 41.20)
 }
 
 namespace weapon
