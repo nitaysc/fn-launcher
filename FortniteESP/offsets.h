@@ -73,12 +73,9 @@ namespace player
     constexpr uintptr_t bIsCrouched       = 0x430;       // confirmed (ACharacter)
     constexpr uintptr_t CurrentVehicle    = 0x2AE8;      // unverified: vehicle pointer when player is seated
 
-    // Health/Shield offsets (FortPawn)
-    constexpr uintptr_t Health           = 0x1AAC;      // CurrentHealth on FortPawn (verify)
-    constexpr uintptr_t Shield           = 0x1AB0;      // CurrentShield on FortPawn (verify)
-    constexpr uintptr_t MaxHealth        = 0x1AB4;      // MaxHealth on FortPawn (verify)
-    constexpr uintptr_t MaxShield        = 0x1AB8;      // MaxShield on FortPawn (verify)
-    constexpr uintptr_t PlayerName       = 0x338;       // Text_PlayerName on AFortPlayerState (verify)
+    // Health/Shield (from AFortPlayerStateZone via cheatoffsets.com 41.20)
+    constexpr uintptr_t CurrentHealth     = 0xCD4;       // AFortPlayerStateZone::CurrentHealth
+    constexpr uintptr_t CurrentShield     = 0xCDC;       // AFortPlayerStateZone::CurrentShield
 }
 
 namespace weapon
