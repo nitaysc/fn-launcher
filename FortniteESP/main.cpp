@@ -1143,7 +1143,7 @@ void RenderESP()
         float t = (float)(elapsed / 0.016); // normalize to data interval
         if (t > 1.5f) t = 1.5f;
         if (t < 0.0f) t = 0.0f;
-        FVec3 predOffset = { pd.velocity.x * t, pd.velocity.y * t, pd.velocity.z * t };
+        FVec3 predOffset = { pd.velocity.x * 0.3f, pd.velocity.y * 0.3f, pd.velocity.z * 0.3f };
 
         if (pd.hasBones) {
             int cornerBones[] = { 0, 3, 4, 7 };
