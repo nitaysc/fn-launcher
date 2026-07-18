@@ -146,7 +146,6 @@ uint64_t g_gameBase = 0;
 int g_playerCount = 0;
 int g_renderFrameIdx = 0;
 static double g_avgESPms = 0, g_avgAimMs = 0, g_avgDrawMs = 0, g_avgPresentMs = 0;
-static LARGE_INTEGER g_lastDataTime = {};  // for ESP interpolation
 
 struct ScreenBone { FVec2 s; bool visible; };
 
@@ -1072,8 +1071,6 @@ void ESPThreadFunc()
             g_playerCount = g_frames[writeIdx].playerCount;
         }
         g_readIdx.store(writeIdx);
-        if (g_frames[writeIdx].hasData)
-            QueryPerformanceCounter(&g_lastDataTime);
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
@@ -1120,16 +1117,8 @@ void RenderESP()
         float minX = 99999, minY = 99999, maxX = -99999, maxY = -99999;
         int projected = 0;
 
-        // Time-based interpolation: smooth ESP movement between data frames
-        static LARGE_INTEGER espPerfFreq;
-        static bool espFreqInit = false;
-        if (!espFreqInit) { QueryPerformanceFrequency(&espPerfFreq); espFreqInit = true; }
-        LARGE_INTEGER espNow;
-        QueryPerformanceCounter(&espNow);
-        float t = (float)((espNow.QuadPart - g_lastDataTime.QuadPart) / (double)espPerfFreq.QuadPart) / 0.016f;
-        if (t > 1.5f) t = 1.5f;
-        if (t < 0.0f) t = 0.0f;
-        FVec3 predOffset = { pd.velocity.x * t, pd.velocity.y * t, pd.velocity.z * t };
+        float predictFactor = 0.8f;
+        FVec3 predOffset = { pd.velocity.x * predictFactor, pd.velocity.y * predictFactor, pd.velocity.z * predictFactor };
 
         if (pd.hasBones) {
             int cornerBones[] = { 0, 3, 4, 7 };
