@@ -1405,25 +1405,61 @@ bool AttachToFortnite()
 // ============================================================
 void RenderMenu()
 {
-    ImGui::SetNextWindowSize(ImVec2(420, 480), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Fortnite ESP v41.20", nullptr, ImGuiWindowFlags_NoCollapse);
+    ImGui::SetNextWindowSize(ImVec2(480, 520), ImGuiCond_FirstUseEver);
+    ImGui::Begin("nullware", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
 
-    if (g_driverReady) ImGui::TextColored(ImVec4(0,1,0,1), "Driver: OK");
-    else               ImGui::TextColored(ImVec4(1,0,0,1), "Driver: FAIL");
+    // Status bar
+    ImDrawList* menuDraw = ImGui::GetWindowDrawList();
+    ImVec2 wPos = ImGui::GetWindowPos();
+    ImVec2 wSize = ImGui::GetWindowSize();
+    menuDraw->AddRectFilled(wPos, ImVec2(wPos.x + wSize.x, wPos.y + 36), IM_COL32(12, 12, 20, 255), 10.0f, ImDrawFlags_RoundCornersTop);
+    ImGui::SetCursorPosY(8);
+    ImGui::Indent(14);
+    ImGui::TextColored(ImVec4(0.45f,0.75f,1.0f,1), "nullware");
     ImGui::SameLine();
-    if (g_targetPID) ImGui::TextColored(ImVec4(0,1,0,1), "| PID: %u", g_targetPID);
-    else             ImGui::TextColored(ImVec4(1,1,0,1), "| Not Attached");
-    ImGui::SameLine();
-    ImGui::Text("| %d players | %.0f fps", g_playerCount, ImGui::GetIO().Framerate);
-    ImGui::Text("ESP:%.1fms Aim:%.1fms Draw:%.1fms Present:%.1fms",
-        g_avgESPms, g_avgAimMs, g_avgDrawMs, g_avgPresentMs);
+    ImGui::TextColored(ImVec4(0.4f,0.4f,0.5f,1), "v1.100");
+    ImGui::SameLine(wSize.x - 160);
+    ImGui::SetCursorPosY(10);
+    if (g_driverReady && g_targetPID) {
+        ImGui::TextColored(ImVec4(0.3f,1.0f,0.3f,1), "  ACTIVE");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.5f,0.5f,0.6f,1), "%dpl", g_playerCount);
+    } else {
+        ImGui::TextColored(ImVec4(1.0f,0.4f,0.4f,1), "  OFFLINE");
+    }
+    ImGui::Unindent(14);
+    ImGui::SetCursorPosY(38);
 
-    if (ImGui::Button("Reattach", ImVec2(-1, 0))) AttachToFortnite();
+    // Stats row
+    ImGui::Indent(14);
+    ImGui::TextColored(ImVec4(0.5f,0.5f,0.6f,1), "%.0f fps", ImGui::GetIO().Framerate);
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.6f,0.6f,0.7f,1), "esp %.1fms aim %.1fms draw %.1fms", 
+        g_avgESPms, g_avgAimMs, g_avgDrawMs);
+    ImGui::SameLine(wSize.x - 100);
+    ImGui::SetCursorPosY(40);
+    if (ImGui::Button("INJECT", ImVec2(80, 0))) AttachToFortnite();
+    ImGui::Unindent(14);
+    ImGui::Spacing();
     ImGui::Spacing();
 
     if (ImGui::BeginTabBar("##tabs")) {
 
-        if (ImGui::BeginTabItem("Visuals")) {
+        if (ImGui::BeginTabItem("AIMBOT")) {
+            ImGui::Checkbox("Master Switch (P)", &g_aim.masterEnabled);
+            ImGui::Checkbox("Enabled", &g_aim.enabled);
+            ImGui::SliderFloat("Smoothness", &g_aim.smooth, 0.01f, 0.50f, "%.2f");
+            ImGui::SliderFloat("FOV", &g_aim.fov, 1.0f, 90.0f, "%.0f");
+            ImGui::SliderFloat("Sensitivity", &g_aim.stickSensitivity, 0.1f, 1.0f, "%.2f");
+            ImGui::Checkbox("Auto Fire", &g_aim.autoFire);
+            ImGui::Checkbox("Aim at Teammates", &g_aim.aimAtTeam);
+            ImGui::ColorEdit4("FOV Circle", g_aim.fovCircleColor, ImGuiColorEditFlags_NoInputs);
+            if (g_vigem.IsReady()) ImGui::TextColored(ImVec4(0,1,0,1), "ViGEm: OK");
+            else ImGui::TextColored(ImVec4(1,0.5f,0,1), "ViGEm: Not Ready");
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("VISUALS")) {
             ImGui::Checkbox("Enable ESP", &g_settings.enabled);
             ImGui::Checkbox("Box", &g_settings.showBox);
             if (g_settings.showBox) {
@@ -1440,7 +1476,7 @@ void RenderMenu()
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Colors")) {
+        if (ImGui::BeginTabItem("COLORS")) {
             int cm = (int)g_settings.colorMode;
             ImGui::SetNextItemWidth(160);
             if (ImGui::Combo("Color Mode", &cm, "Static\0Distance\0Team\0"))
@@ -1660,29 +1696,69 @@ int main()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr; // don't persist window layout / always use defaults
+    io.IniFilename = nullptr;
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.TabRounding = 4.0f;
-    style.GrabRounding = 3.0f;
-    style.WindowBorderSize = 1.0f;
-    style.FramePadding = ImVec2(6, 4);
-    style.ItemSpacing = ImVec2(8, 5);
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.94f);
-    style.Colors[ImGuiCol_TitleBg] = ImVec4(0.10f, 0.10f, 0.14f, 1.0f);
-    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.16f, 0.16f, 0.22f, 1.0f);
-    style.Colors[ImGuiCol_Tab] = ImVec4(0.14f, 0.14f, 0.20f, 1.0f);
-    style.Colors[ImGuiCol_TabHovered] = ImVec4(0.30f, 0.30f, 0.45f, 1.0f);
-    style.Colors[ImGuiCol_TabActive] = ImVec4(0.22f, 0.22f, 0.35f, 1.0f);
-    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.14f, 0.14f, 0.18f, 1.0f);
-    style.Colors[ImGuiCol_CheckMark] = ImVec4(0.45f, 0.75f, 1.0f, 1.0f);
-    style.Colors[ImGuiCol_SliderGrab] = ImVec4(0.45f, 0.75f, 1.0f, 1.0f);
-    style.Colors[ImGuiCol_Button] = ImVec4(0.20f, 0.20f, 0.30f, 1.0f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.30f, 0.45f, 1.0f);
-    style.AntiAliasedLines = false;
-    style.AntiAliasedFill = false;
+
+    // Modern rounded theme
+    style.WindowRounding    = 10.0f;
+    style.ChildRounding     = 8.0f;
+    style.FrameRounding     = 6.0f;
+    style.PopupRounding     = 8.0f;
+    style.ScrollbarRounding = 10.0f;
+    style.GrabRounding      = 6.0f;
+    style.TabRounding       = 8.0f;
+    style.WindowBorderSize  = 0.0f;
+    style.FrameBorderSize   = 1.0f;
+    style.FramePadding      = ImVec2(10, 6);
+    style.ItemSpacing       = ImVec2(10, 8);
+    style.ItemInnerSpacing  = ImVec2(8, 6);
+    style.WindowPadding     = ImVec2(20, 20);
+    style.Alpha             = 1.0f;
+    style.DisabledAlpha     = 0.5f;
+    style.WindowMinSize     = ImVec2(100, 100);
+
+    // Custom color scheme
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg]         = ImVec4(0.06f, 0.06f, 0.08f, 0.96f);
+    colors[ImGuiCol_Border]           = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
+    colors[ImGuiCol_FrameBg]          = ImVec4(0.10f, 0.10f, 0.14f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]   = ImVec4(0.16f, 0.16f, 0.22f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]    = ImVec4(0.18f, 0.18f, 0.26f, 1.00f);
+    colors[ImGuiCol_TitleBg]          = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]    = ImVec4(0.08f, 0.08f, 0.12f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg]      = ImVec4(0.04f, 0.04f, 0.06f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrab]    = ImVec4(0.25f, 0.25f, 0.35f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.35f, 0.35f, 0.45f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.45f, 0.45f, 0.55f, 1.00f);
+    colors[ImGuiCol_CheckMark]        = ImVec4(0.45f, 0.75f, 1.00f, 1.00f);
+    colors[ImGuiCol_SliderGrab]       = ImVec4(0.45f, 0.75f, 1.00f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.55f, 0.85f, 1.00f, 1.00f);
+    colors[ImGuiCol_Button]           = ImVec4(0.16f, 0.16f, 0.24f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]    = ImVec4(0.26f, 0.26f, 0.38f, 1.00f);
+    colors[ImGuiCol_ButtonActive]     = ImVec4(0.20f, 0.20f, 0.30f, 1.00f);
+    colors[ImGuiCol_Header]           = ImVec4(0.16f, 0.16f, 0.24f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]    = ImVec4(0.26f, 0.26f, 0.38f, 1.00f);
+    colors[ImGuiCol_HeaderActive]     = ImVec4(0.20f, 0.20f, 0.30f, 1.00f);
+    colors[ImGuiCol_Separator]        = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
+    colors[ImGuiCol_ResizeGrip]       = ImVec4(0.20f, 0.20f, 0.30f, 1.00f);
+    colors[ImGuiCol_ResizeGripHovered]= ImVec4(0.35f, 0.35f, 0.45f, 1.00f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.45f, 0.45f, 0.55f, 1.00f);
+    colors[ImGuiCol_Tab]              = ImVec4(0.08f, 0.08f, 0.12f, 1.00f);
+    colors[ImGuiCol_TabHovered]       = ImVec4(0.26f, 0.26f, 0.38f, 1.00f);
+    colors[ImGuiCol_TabActive]        = ImVec4(0.14f, 0.14f, 0.22f, 1.00f);
+    colors[ImGuiCol_TabUnfocused]     = ImVec4(0.06f, 0.06f, 0.10f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive]=ImVec4(0.10f, 0.10f, 0.16f, 1.00f);
+    colors[ImGuiCol_PlotLines]        = ImVec4(0.45f, 0.75f, 1.00f, 1.00f);
+    colors[ImGuiCol_PlotHistogram]    = ImVec4(0.45f, 0.75f, 1.00f, 1.00f);
+    colors[ImGuiCol_TextSelectedBg]   = ImVec4(0.25f, 0.50f, 0.75f, 0.40f);
+    colors[ImGuiCol_DragDropTarget]   = ImVec4(0.45f, 0.75f, 1.00f, 0.50f);
+    colors[ImGuiCol_NavHighlight]     = ImVec4(0.45f, 0.75f, 1.00f, 0.50f);
+
+    io.Fonts->AddFontDefault();
+    ImFontConfig cfg;
+    cfg.SizePixels = 16.0f;
+    io.Fonts->AddFontDefault(&cfg);
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
